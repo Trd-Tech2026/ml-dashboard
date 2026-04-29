@@ -30,6 +30,9 @@ export async function GET() {
   )
   const ordersData = await ordersRes.json()
 
+  console.log('ML status:', ordersRes.status)
+  console.log('ML response:', JSON.stringify(ordersData))
+
   let sincronizadas = 0
 
   if (ordersData.results) {
@@ -64,6 +67,7 @@ export async function GET() {
 
   return NextResponse.json({ 
     ok: true, 
-    mensaje: `${sincronizadas} órdenes sincronizadas correctamente` 
+    mensaje: `${sincronizadas} órdenes sincronizadas correctamente`,
+    debug_total: ordersData.paging?.total ?? null
   })
 }
