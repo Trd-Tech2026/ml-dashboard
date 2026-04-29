@@ -10,8 +10,6 @@ type TokenRow = {
   expires_at: string
 }
 
-// Refresca el access_token usando el refresh_token y guarda en Supabase.
-// Devuelve el nuevo access_token o null si falla.
 async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
   console.log('Refrescando token...')
 
@@ -75,7 +73,6 @@ export async function GET() {
   let token = tokenRow.access_token
   const sellerId = tokenRow.ml_user_id
 
-  // Fecha desde la cual traer órdenes (últimos 90 días)
   const desde = new Date()
   desde.setDate(desde.getDate() - 90)
   const desdeISO = desde.toISOString()
@@ -99,7 +96,6 @@ export async function GET() {
     })
     let ordersData = await ordersRes.json()
 
-    // Si ML rechazó por token vencido y todavía no refrescamos, intentamos refrescar y reintentar UNA vez
     if (ordersRes.status === 401 && !yaRefresque) {
       console.log('Token rechazado por ML, intentando refresh...')
       const nuevoToken = await refreshToken(supabase, tokenRow)
@@ -109,7 +105,6 @@ export async function GET() {
       token = nuevoToken
       yaRefresque = true
 
-      // Reintento con el token nuevo
       ordersRes = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -130,40 +125,51 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    for (const order of results) {
-      const { error: orderError } = await supabase.from('orders').upsert({
+    // PROCESAR ÓRDENES EN PARALELO (en vez de una por una)
+    const ordersToInsert = results.map((order: any) => ({
+      order_id: order.id,
+      status: order.status,
+      total_amount: order.total_amount,
+      currency: order.currency_id,
+      buyer_id: order.buyer.id,
+      buyer_nickname: order.buyer.nickname,
+      date_created: order.date_created,
+      date_closed: order.date_closed,
+      cancel_reason: order.cancel_detail?.description ?? null
+    }))
+
+    const itemsToInsert = results.flatMap((order: any) =>
+      order.order_items.map((item: any) => ({
         order_id: order.id,
-        status: order.status,
-        total_amount: order.total_amount,
-        currency: order.currency_id,
-        buyer_id: order.buyer.id,
-        buyer_nickname: order.buyer.nickname,
-        date_created: order.date_created,
-        date_closed: order.date_closed,
-        cancel_reason: order.cancel_detail?.description ?? null
-      }, { onConflict: 'order_id' })
+        item_id: item.item.id,
+        title: item.item.title,
+        quantity: item.quantity,
+        unit_price: item.unit_price
+      }))
+    )
 
-      if (orderError) {
-        console.log('Order upsert error:', JSON.stringify(orderError))
-        continue
-      }
+    // Bulk upsert: una sola llamada para todas las orders, una sola para todos los items
+    const { error: ordersError } = await supabase
+      .from('orders')
+      .upsert(ordersToInsert, { onConflict: 'order_id' })
 
-      for (const item of order.order_items) {
-        const { error: itemError } = await supabase.from('order_items').upsert({
-          order_id: order.id,
-          item_id: item.item.id,
-          title: item.item.title,
-          quantity: item.quantity,
-          unit_price: item.unit_price
-        }, { onConflict: 'order_id,item_id' })
-
-        if (itemError) {
-          console.log('Item upsert error:', JSON.stringify(itemError))
-        }
-      }
-
-      sincronizadas++
+    if (ordersError) {
+      console.log('Bulk orders upsert error:', JSON.stringify(ordersError))
+      huboError = true
+      break
     }
+
+    if (itemsToInsert.length > 0) {
+      const { error: itemsError } = await supabase
+        .from('order_items')
+        .upsert(itemsToInsert, { onConflict: 'order_id,item_id' })
+
+      if (itemsError) {
+        console.log('Bulk items upsert error:', JSON.stringify(itemsError))
+      }
+    }
+
+    sincronizadas += results.length
 
     console.log(`Página ${pagina} OK — ${sincronizadas}/${totalDisponible}`)
 
