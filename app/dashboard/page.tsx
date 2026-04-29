@@ -17,7 +17,6 @@ export default async function Dashboard() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // KPIs: traer TODAS las órdenes (solo columnas necesarias para que sea rápido)
   const { data: todas } = await supabase
     .from('orders')
     .select('status, total_amount')
@@ -29,7 +28,6 @@ export default async function Dashboard() {
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
-  // Tabla: solo las 100 más recientes
   const { data: recientes } = await supabase
     .from('orders')
     .select('*')
