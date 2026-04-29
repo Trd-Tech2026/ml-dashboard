@@ -26,12 +26,10 @@ export default async function Historicas({ searchParams }: Props) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // Calcular fecha desde hace X días
   const desde = new Date()
   desde.setDate(desde.getDate() - dias)
   const desdeISO = desde.toISOString()
 
-  // KPIs: traer TODAS las órdenes del rango paginando
   const todasOrdenes: Pick<Order, 'status' | 'total_amount'>[] = []
   let from = 0
   const PAGE_SIZE = 1000
@@ -53,7 +51,6 @@ export default async function Historicas({ searchParams }: Props) {
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
-  // Tabla: las 100 más recientes del rango
   const { data: recientes } = await supabase
     .from('orders')
     .select('*')
@@ -76,132 +73,315 @@ export default async function Historicas({ searchParams }: Props) {
   }
 
   const rangos = [
-    { value: '7', label: 'Últimos 7 días' },
-    { value: '30', label: 'Últimos 30 días' },
-    { value: '90', label: 'Últimos 90 días' },
+    { value: '7', label: '7 días', labelMobile: '7d' },
+    { value: '30', label: '30 días', labelMobile: '30d' },
+    { value: '90', label: '90 días', labelMobile: '90d' },
+  ]
+
+  const cards = [
+    { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: '#4CAF50' },
+    { titulo: 'Facturación', valor: formatARS(facturacion), color: '#2196F3' },
+    { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: '#FF9800' },
+    { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: '#f44336' },
   ]
 
   return (
-    <div style={{ padding: '40px', minHeight: '100vh' }}>
-      <h1 style={{ color: '#333', margin: '0 0 4px' }}>Ventas históricas</h1>
-      <p style={{ color: '#666', margin: '0 0 24px' }}>
-        Análisis de ventas en períodos pasados
-      </p>
+    <div className="page">
+      <h1>Ventas históricas</h1>
+      <p className="subtitulo">Análisis de ventas en períodos pasados</p>
 
-      {/* Filtros de rango */}
-      <div style={{
-        display: 'flex',
-        gap: '8px',
-        marginBottom: '32px',
-        flexWrap: 'wrap',
-      }}>
+      <div className="filtros">
         {rangos.map((r) => {
           const activo = rango === r.value
           return (
             <Link
               key={r.value}
               href={`/historicas?rango=${r.value}`}
-              style={{
-                padding: '10px 20px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: activo ? 'bold' : 'normal',
-                backgroundColor: activo ? '#2196F3' : 'white',
-                color: activo ? 'white' : '#666',
-                border: activo ? 'none' : '1px solid #ddd',
-                textDecoration: 'none',
-              }}
+              className={`filtro ${activo ? 'activo' : ''}`}
             >
-              {r.label}
+              <span className="label-desktop">Últimos {r.label}</span>
+              <span className="label-mobile">{r.labelMobile}</span>
             </Link>
           )
         })}
       </div>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '16px',
-        marginBottom: '32px'
-      }}>
-        {[
-          { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: '#4CAF50' },
-          { titulo: 'Facturación', valor: formatARS(facturacion), color: '#2196F3' },
-          { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: '#FF9800' },
-          { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: '#f44336' },
-        ].map((card) => (
-          <div key={card.titulo} style={{
-            backgroundColor: 'white',
-            borderRadius: '12px',
-            padding: '24px',
-            borderTop: `4px solid ${card.color}`
-          }}>
-            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 8px' }}>
-              {card.titulo}
-            </p>
-            <p style={{ fontSize: '28px', fontWeight: 'bold', margin: 0 }}>
-              {card.valor}
-            </p>
+      <div className="kpis">
+        {cards.map((card) => (
+          <div key={card.titulo} className="kpi-card" style={{ borderTop: `4px solid ${card.color}` }}>
+            <p className="kpi-titulo">{card.titulo}</p>
+            <p className="kpi-valor">{card.valor}</p>
           </div>
         ))}
       </div>
 
-      <div style={{
-        backgroundColor: 'white',
-        borderRadius: '12px',
-        padding: '24px'
-      }}>
-        <h2 style={{ margin: '0 0 16px', color: '#333' }}>
-          Últimas 100 ventas del período
-        </h2>
-        <p style={{ color: '#999', fontSize: '13px', margin: '0 0 16px' }}>
-          Total de órdenes en el período: {todasOrdenes.length}
-        </p>
+      <div className="tabla-container">
+        <h2>Últimas 100 ventas del período</h2>
+        <p className="total-info">Total de órdenes en el período: {todasOrdenes.length}</p>
 
         {ordenes.length === 0 ? (
-          <p style={{ color: '#999' }}>
-            No hay ventas en este período.
-          </p>
+          <p className="empty">No hay ventas en este período.</p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #eee', textAlign: 'left' }}>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Fecha</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Order ID</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Comprador</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Estado</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px', textAlign: 'right' }}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ordenes.map((o) => (
-                  <tr key={o.order_id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                    <td style={{ padding: '12px 8px', fontSize: '14px' }}>{formatFecha(o.date_created)}</td>
-                    <td style={{ padding: '12px 8px', fontSize: '13px', color: '#666' }}>{o.order_id}</td>
-                    <td style={{ padding: '12px 8px', fontSize: '14px' }}>{o.buyer_nickname ?? '-'}</td>
-                    <td style={{ padding: '12px 8px' }}>
-                      <span style={{
-                        backgroundColor: colorStatus(o.status),
-                        color: 'white',
-                        padding: '4px 10px',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 'bold'
-                      }}>
-                        {o.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 8px', fontSize: '14px', textAlign: 'right', fontWeight: 'bold' }}>
-                      {formatARS(Number(o.total_amount ?? 0))}
-                    </td>
+          <>
+            {/* Tabla desktop */}
+            <div className="tabla-desktop">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Order ID</th>
+                    <th>Comprador</th>
+                    <th>Estado</th>
+                    <th style={{ textAlign: 'right' }}>Total</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {ordenes.map((o) => (
+                    <tr key={o.order_id}>
+                      <td>{formatFecha(o.date_created)}</td>
+                      <td className="order-id">{o.order_id}</td>
+                      <td>{o.buyer_nickname ?? '-'}</td>
+                      <td>
+                        <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
+                          {o.status}
+                        </span>
+                      </td>
+                      <td className="total">{formatARS(Number(o.total_amount ?? 0))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Cards mobile */}
+            <div className="cards-mobile">
+              {ordenes.map((o) => (
+                <div key={o.order_id} className="venta-card">
+                  <div className="venta-card-row">
+                    <span className="venta-fecha">{formatFecha(o.date_created)}</span>
+                    <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
+                      {o.status}
+                    </span>
+                  </div>
+                  <div className="venta-comprador">{o.buyer_nickname ?? '-'}</div>
+                  <div className="venta-card-row">
+                    <span className="venta-orderid">#{o.order_id}</span>
+                    <span className="venta-total">{formatARS(Number(o.total_amount ?? 0))}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
+
+      <style>{`
+        .page {
+          padding: 40px;
+          min-height: 100vh;
+        }
+        h1 {
+          color: #333;
+          margin: 0 0 4px;
+        }
+        .subtitulo {
+          color: #666;
+          margin: 0 0 24px;
+        }
+        .filtros {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 32px;
+          flex-wrap: wrap;
+        }
+        .filtro {
+          padding: 10px 20px;
+          border-radius: 8px;
+          font-size: 14px;
+          background-color: white;
+          color: #666;
+          border: 1px solid #ddd;
+          text-decoration: none;
+        }
+        .filtro.activo {
+          background-color: #2196F3;
+          color: white;
+          border-color: #2196F3;
+          font-weight: bold;
+        }
+        .label-mobile {
+          display: none;
+        }
+        .kpis {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 32px;
+        }
+        .kpi-card {
+          background-color: white;
+          border-radius: 12px;
+          padding: 24px;
+        }
+        .kpi-titulo {
+          color: #666;
+          font-size: 14px;
+          margin: 0 0 8px;
+        }
+        .kpi-valor {
+          font-size: 28px;
+          font-weight: bold;
+          margin: 0;
+        }
+        .tabla-container {
+          background-color: white;
+          border-radius: 12px;
+          padding: 24px;
+        }
+        .tabla-container h2 {
+          margin: 0 0 8px;
+          color: #333;
+        }
+        .total-info {
+          color: #999;
+          font-size: 13px;
+          margin: 0 0 16px;
+        }
+        .empty {
+          color: #999;
+        }
+        .tabla-desktop table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .tabla-desktop thead tr {
+          border-bottom: 2px solid #eee;
+          text-align: left;
+        }
+        .tabla-desktop th {
+          padding: 12px 8px;
+          color: #666;
+          font-size: 13px;
+        }
+        .tabla-desktop tbody tr {
+          border-bottom: 1px solid #f0f0f0;
+        }
+        .tabla-desktop td {
+          padding: 12px 8px;
+          font-size: 14px;
+        }
+        .order-id {
+          font-size: 13px;
+          color: #666;
+        }
+        .total {
+          text-align: right;
+          font-weight: bold;
+        }
+        .badge {
+          color: white;
+          padding: 4px 10px;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: bold;
+          display: inline-block;
+        }
+        .cards-mobile {
+          display: none;
+        }
+
+        @media (max-width: 768px) {
+          .page {
+            padding: 16px;
+          }
+          h1 {
+            font-size: 22px;
+          }
+          .subtitulo {
+            font-size: 13px;
+            margin-bottom: 16px;
+          }
+          .filtros {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 20px;
+          }
+          .filtro {
+            text-align: center;
+            padding: 10px 8px;
+            font-size: 13px;
+          }
+          .label-desktop {
+            display: none;
+          }
+          .label-mobile {
+            display: inline;
+          }
+          .kpis {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+          }
+          .kpi-card {
+            padding: 14px;
+          }
+          .kpi-titulo {
+            font-size: 12px;
+            margin-bottom: 4px;
+          }
+          .kpi-valor {
+            font-size: 20px;
+          }
+          .tabla-container {
+            padding: 16px;
+          }
+          .tabla-container h2 {
+            font-size: 16px;
+          }
+          .total-info {
+            font-size: 12px;
+          }
+          .tabla-desktop {
+            display: none;
+          }
+          .cards-mobile {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+          }
+          .venta-card {
+            background-color: #fafafa;
+            border-radius: 10px;
+            padding: 12px 14px;
+            border: 1px solid #eee;
+          }
+          .venta-card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .venta-fecha {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+          }
+          .venta-comprador {
+            font-size: 14px;
+            color: #555;
+            margin: 6px 0;
+          }
+          .venta-orderid {
+            font-size: 12px;
+            color: #999;
+          }
+          .venta-total {
+            font-size: 15px;
+            font-weight: bold;
+            color: #333;
+          }
+        }
+      `}</style>
     </div>
   )
 }
