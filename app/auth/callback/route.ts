@@ -22,6 +22,7 @@ export async function GET(request: Request) {
     .single()
 
   if (!pendingToken) {
+    console.log('No pending token found for state:', state)
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
@@ -41,18 +42,23 @@ export async function GET(request: Request) {
   })
 
   const tokenData = await response.json()
+  console.log('Token data:', JSON.stringify(tokenData))
 
   await supabase.from('ml_tokens').delete().eq('ml_user_id', state)
   await supabase.from('ml_tokens').delete().eq('ml_user_id', String(tokenData.user_id))
 
-  if (tokenData.access_token) {
-    await supabase.from('ml_tokens').insert({
-      ml_user_id: String(tokenData.user_id),
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
-    })
+  const insertData = {
+    ml_user_id: String(tokenData.user_id),
+    access_token: tokenData.access_token,
+    refresh_token: tokenData.refresh_token,
+    expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
   }
+  
+  console.log('Inserting:', JSON.stringify(insertData))
+  
+  const { error } = await supabase.from('ml_tokens').insert(insertData)
+  
+  console.log('Insert error:', JSON.stringify(error))
 
   return NextResponse.redirect(new URL('/dashboard', request.url))
 }
