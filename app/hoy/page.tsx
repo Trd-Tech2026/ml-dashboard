@@ -12,24 +12,30 @@ type Order = {
   date_created: string
 }
 
+const TZ = 'America/Argentina/Buenos_Aires'
+
+// Devuelve el inicio del día actual en hora Argentina, en formato ISO UTC
+function inicioDiaArgentinaISO(): string {
+  const ahora = new Date()
+  // Formateamos como YYYY-MM-DD en zona Argentina
+  const fechaAR = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(ahora) // ej: "2026-04-29"
+  // Construimos el inicio del día Argentina (00:00 ART = 03:00 UTC)
+  return new Date(`${fechaAR}T00:00:00-03:00`).toISOString()
+}
+
 export default async function Hoy() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // Calcular el inicio del día actual en Argentina (UTC-3)
-  // Para no complicar, usamos UTC del servidor + ajuste de 3hs
-  const ahora = new Date()
-  const inicioDiaAR = new Date(ahora)
-  inicioDiaAR.setUTCHours(3, 0, 0, 0) // 00:00 ART = 03:00 UTC
-  // Si la hora actual UTC es menor a 03:00, todavía estamos en el día anterior en ART
-  if (ahora.getUTCHours() < 3) {
-    inicioDiaAR.setUTCDate(inicioDiaAR.getUTCDate() - 1)
-  }
-  const inicioDiaISO = inicioDiaAR.toISOString()
+  const inicioDiaISO = inicioDiaArgentinaISO()
 
-  // Traer todas las órdenes de hoy
   const { data: ordenesHoy } = await supabase
     .from('orders')
     .select('*')
@@ -47,10 +53,16 @@ export default async function Hoy() {
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
   const formatHora = (iso: string) =>
-    new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+    new Date(iso).toLocaleTimeString('es-AR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: TZ,
+    })
 
   const fechaHoy = new Date().toLocaleDateString('es-AR', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    timeZone: TZ,
   })
 
   const colorStatus = (status: string) => {
