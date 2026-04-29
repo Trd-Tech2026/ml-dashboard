@@ -73,9 +73,33 @@ export async function GET() {
   let token = tokenRow.access_token
   const sellerId = tokenRow.ml_user_id
 
-  const desde = new Date()
-  desde.setDate(desde.getDate() - 90)
-  const desdeISO = desde.toISOString()
+  // Leer el último sync
+  const { data: syncStateData } = await supabase
+    .from('sync_state')
+    .select('last_sync_at')
+    .eq('id', 1)
+    .maybeSingle()
+
+  const lastSyncAt: string | null = syncStateData?.last_sync_at ?? null
+
+  // Marcar el inicio del sync ANTES de empezar a pedir datos
+  // (así si llegan órdenes mientras sincronizamos, las agarramos en el próximo run)
+  const inicioSync = new Date().toISOString()
+
+  // Definir filtro de ML según si es sync incremental o primer sync
+  let filtroML: string
+  let modoSync: string
+  if (lastSyncAt) {
+    // Sync incremental: pedir órdenes actualizadas desde el último sync
+    filtroML = `order.date_last_updated.from=${lastSyncAt}`
+    modoSync = 'incremental'
+  } else {
+    // Primer sync: últimos 90 días
+    const desde = new Date()
+    desde.setDate(desde.getDate() - 90)
+    filtroML = `order.date_created.from=${desde.toISOString()}`
+    modoSync = 'inicial-90d'
+  }
 
   const LIMIT = 50
   const MAX_PAGES = 100
@@ -89,7 +113,7 @@ export async function GET() {
   while (pagina < MAX_PAGES) {
     pagina++
 
-    const url = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.date_created.from=${desdeISO}&sort=date_desc&limit=${LIMIT}&offset=${offset}`
+    const url = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&${filtroML}&sort=date_desc&limit=${LIMIT}&offset=${offset}`
 
     let ordersRes = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` }
@@ -119,13 +143,12 @@ export async function GET() {
 
     if (pagina === 1) {
       totalDisponible = ordersData.paging?.total ?? 0
-      console.log(`Total a sincronizar (últimos 90 días): ${totalDisponible}`)
+      console.log(`Total a sincronizar (modo: ${modoSync}): ${totalDisponible}`)
     }
 
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // PROCESAR ÓRDENES EN PARALELO (en vez de una por una)
     const ordersToInsert = results.map((order: any) => ({
       order_id: order.id,
       status: order.status,
@@ -148,7 +171,6 @@ export async function GET() {
       }))
     )
 
-    // Bulk upsert: una sola llamada para todas las orders, una sola para todos los items
     const { error: ordersError } = await supabase
       .from('orders')
       .upsert(ordersToInsert, { onConflict: 'order_id' })
@@ -170,17 +192,25 @@ export async function GET() {
     }
 
     sincronizadas += results.length
-
     console.log(`Página ${pagina} OK — ${sincronizadas}/${totalDisponible}`)
 
     if (results.length < LIMIT) break
-
     offset += LIMIT
+  }
+
+  // Solo actualizar last_sync_at si no hubo error
+  if (!huboError) {
+    await supabase
+      .from('sync_state')
+      .update({ last_sync_at: inicioSync, updated_at: new Date().toISOString() })
+      .eq('id', 1)
   }
 
   return NextResponse.json({
     ok: !huboError,
-    mensaje: `${sincronizadas} órdenes sincronizadas (últimos 90 días)`,
+    modo: modoSync,
+    desde: lastSyncAt,
+    mensaje: `${sincronizadas} órdenes sincronizadas (${modoSync})`,
     total_disponible: totalDisponible,
     paginas_procesadas: pagina,
     refresh_aplicado: yaRefresque
