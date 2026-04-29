@@ -73,7 +73,6 @@ export async function GET() {
   let token = tokenRow.access_token
   const sellerId = tokenRow.ml_user_id
 
-  // Leer el último sync
   const { data: syncStateData } = await supabase
     .from('sync_state')
     .select('last_sync_at')
@@ -81,23 +80,22 @@ export async function GET() {
     .maybeSingle()
 
   const lastSyncAt: string | null = syncStateData?.last_sync_at ?? null
-
-  // Marcar el inicio del sync ANTES de empezar a pedir datos
-  // (así si llegan órdenes mientras sincronizamos, las agarramos en el próximo run)
   const inicioSync = new Date().toISOString()
 
-  // Definir filtro de ML según si es sync incremental o primer sync
+  // ML requiere formato ISO sin milisegundos: YYYY-MM-DDTHH:mm:ss.000-00:00
+  const formatearFechaParaML = (iso: string) => {
+    return iso.replace(/\.\d{3}Z$/, '.000-00:00').replace(/\.\d{3}\+00:00$/, '.000-00:00')
+  }
+
   let filtroML: string
   let modoSync: string
   if (lastSyncAt) {
-    // Sync incremental: pedir órdenes actualizadas desde el último sync
-    filtroML = `order.date_last_updated.from=${lastSyncAt}`
+    filtroML = `order.date_last_updated.from=${formatearFechaParaML(lastSyncAt)}`
     modoSync = 'incremental'
   } else {
-    // Primer sync: últimos 90 días
     const desde = new Date()
     desde.setDate(desde.getDate() - 90)
-    filtroML = `order.date_created.from=${desde.toISOString()}`
+    filtroML = `order.date_created.from=${formatearFechaParaML(desde.toISOString())}`
     modoSync = 'inicial-90d'
   }
 
@@ -198,7 +196,6 @@ export async function GET() {
     offset += LIMIT
   }
 
-  // Solo actualizar last_sync_at si no hubo error
   if (!huboError) {
     await supabase
       .from('sync_state')
