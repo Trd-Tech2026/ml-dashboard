@@ -21,7 +21,7 @@ export default async function Dashboard() {
   const { data: todas } = await supabase
     .from('orders')
     .select('status, total_amount')
-    .limit(10000)
+    .range(0, 49999)
 
   const todasOrdenes = (todas ?? []) as Pick<Order, 'status' | 'total_amount'>[]
   const ventasPagadas = todasOrdenes.filter(o => o.status === 'paid')
