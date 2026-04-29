@@ -39,7 +39,7 @@ export default function RootLayout({
           }
           @media (max-width: 768px) {
             .layout-main {
-              padding-bottom: 80px;
+              padding-top: 56px;
             }
           }
         `}</style>

@@ -2,9 +2,26 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useState, useEffect } from 'react'
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const [open, setOpen] = useState(false)
+
+  // Cerrar el menú cuando cambia la ruta
+  useEffect(() => {
+    setOpen(false)
+  }, [pathname])
+
+  // Bloquear scroll del body cuando el menú mobile está abierto
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+    return () => { document.body.style.overflow = '' }
+  }, [open])
 
   const items = [
     { href: '/hoy', label: 'Hoy', icon: '🟢' },
@@ -13,11 +30,32 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* Sidebar desktop (oculto en mobile) */}
-      <aside className="sidebar-desktop">
+      {/* Botón hamburguesa (solo mobile) */}
+      <button
+        className="hamburger"
+        onClick={() => setOpen(true)}
+        aria-label="Abrir menú"
+      >
+        ☰
+      </button>
+
+      {/* Overlay oscuro detrás del menú abierto */}
+      {open && <div className="overlay" onClick={() => setOpen(false)} />}
+
+      {/* Sidebar (siempre visible en desktop, deslizable en mobile) */}
+      <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
         <div className="sidebar-header">
-          <h2>ML Dashboard</h2>
-          <p>TRDTECH</p>
+          <div>
+            <h2>ML Dashboard</h2>
+            <p>TRDTECH</p>
+          </div>
+          <button
+            className="close-btn"
+            onClick={() => setOpen(false)}
+            aria-label="Cerrar menú"
+          >
+            ✕
+          </button>
         </div>
         <nav>
           {items.map((item) => {
@@ -36,25 +74,26 @@ export default function Sidebar() {
         </nav>
       </aside>
 
-      {/* Bottom nav mobile (oculto en desktop) */}
-      <nav className="bottom-nav">
-        {items.map((item) => {
-          const activo = pathname === item.href
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`bottom-link ${activo ? 'activo' : ''}`}
-            >
-              <span style={{ fontSize: '22px' }}>{item.icon}</span>
-              <span style={{ fontSize: '11px' }}>{item.label}</span>
-            </Link>
-          )
-        })}
-      </nav>
-
       <style>{`
-        .sidebar-desktop {
+        .hamburger {
+          display: none;
+          position: fixed;
+          top: 12px;
+          left: 12px;
+          z-index: 90;
+          background: white;
+          border: 1px solid #ddd;
+          border-radius: 8px;
+          width: 44px;
+          height: 44px;
+          font-size: 22px;
+          cursor: pointer;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .overlay {
+          display: none;
+        }
+        .sidebar {
           width: 240px;
           background-color: #1a1a1a;
           color: white;
@@ -65,6 +104,9 @@ export default function Sidebar() {
         .sidebar-header {
           padding: 0 24px 24px;
           border-bottom: 1px solid #333;
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
         }
         .sidebar-header h2 {
           margin: 0;
@@ -76,14 +118,25 @@ export default function Sidebar() {
           font-size: 12px;
           color: #888;
         }
-        .sidebar-desktop nav {
+        .close-btn {
+          display: none;
+          background: transparent;
+          border: none;
+          color: white;
+          font-size: 22px;
+          cursor: pointer;
+          padding: 0;
+          width: 32px;
+          height: 32px;
+        }
+        .sidebar nav {
           margin-top: 16px;
         }
         .sidebar-link {
           display: flex;
           align-items: center;
           gap: 12px;
-          padding: 12px 24px;
+          padding: 14px 24px;
           color: #aaa;
           background-color: transparent;
           border-left: 3px solid transparent;
@@ -97,41 +150,32 @@ export default function Sidebar() {
           font-weight: bold;
         }
 
-        .bottom-nav {
-          display: none;
-        }
-
         @media (max-width: 768px) {
-          .sidebar-desktop {
-            display: none;
+          .hamburger {
+            display: block;
           }
-          .bottom-nav {
-            display: flex;
+          .sidebar {
             position: fixed;
-            bottom: 0;
+            top: 0;
             left: 0;
-            right: 0;
-            background-color: #1a1a1a;
-            border-top: 1px solid #333;
+            height: 100vh;
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
             z-index: 100;
-            padding-bottom: env(safe-area-inset-bottom);
+            min-height: 0;
           }
-          .bottom-link {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-            padding: 10px 0;
-            color: #888;
-            text-decoration: none;
-            border-top: 3px solid transparent;
+          .sidebar-open {
+            transform: translateX(0);
           }
-          .bottom-link.activo {
-            color: white;
-            border-top-color: #4CAF50;
-            background-color: #2a2a2a;
+          .overlay {
+            display: block;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 99;
+          }
+          .close-btn {
+            display: block;
           }
         }
       `}</style>
