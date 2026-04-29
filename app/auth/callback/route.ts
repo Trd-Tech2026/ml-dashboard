@@ -41,6 +41,7 @@ export async function GET(request: Request) {
   })
 
   const tokenData = await response.json()
+  console.log('ML token response:', JSON.stringify(tokenData))
 
   await supabase.from('ml_tokens').delete().eq('ml_user_id', state)
 
