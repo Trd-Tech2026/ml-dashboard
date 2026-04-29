@@ -11,7 +11,10 @@ export async function GET() {
   const { data: tokenData } = await supabase
     .from('ml_tokens')
     .select('*')
-    .single()
+    .neq('access_token', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
 
   if (!tokenData) {
     return NextResponse.json({ error: 'No hay token de ML. Hacé login primero.' }, { status: 401 })
