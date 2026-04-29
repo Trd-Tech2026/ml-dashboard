@@ -7,7 +7,6 @@ export async function GET() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // Obtener el token de ML guardado
   const { data: tokenData } = await supabase
     .from('ml_tokens')
     .select('*')
@@ -23,7 +22,6 @@ export async function GET() {
   const token = tokenData.access_token
   const sellerId = tokenData.ml_user_id
 
-  // Traer órdenes de ML
   const ordersRes = await fetch(
     `https://api.mercadolibre.com/orders/search?seller=${sellerId}&limit=50`,
     { headers: { Authorization: `Bearer ${token}` } }
@@ -31,14 +29,12 @@ export async function GET() {
   const ordersData = await ordersRes.json()
 
   console.log('ML status:', ordersRes.status)
-  console.log('ML response:', JSON.stringify(ordersData))
 
   let sincronizadas = 0
 
   if (ordersData.results) {
     for (const order of ordersData.results) {
-      // Guardar orden
-      await supabase.from('orders').upsert({
+      const { error: orderError } = await supabase.from('orders').upsert({
         order_id: order.id,
         status: order.status,
         total_amount: order.total_amount,
@@ -48,25 +44,33 @@ export async function GET() {
         date_created: order.date_created,
         date_closed: order.date_closed,
         cancel_reason: order.cancel_detail?.description ?? null
-      })
+      }, { onConflict: 'order_id' })
 
-      // Guardar productos de la orden
+      if (orderError) {
+        console.log('Order upsert error:', JSON.stringify(orderError))
+        continue
+      }
+
       for (const item of order.order_items) {
-        await supabase.from('order_items').upsert({
+        const { error: itemError } = await supabase.from('order_items').upsert({
           order_id: order.id,
           item_id: item.item.id,
           title: item.item.title,
           quantity: item.quantity,
           unit_price: item.unit_price
-        })
+        }, { onConflict: 'order_id,item_id' })
+
+        if (itemError) {
+          console.log('Item upsert error:', JSON.stringify(itemError))
+        }
       }
 
       sincronizadas++
     }
   }
 
-  return NextResponse.json({ 
-    ok: true, 
+  return NextResponse.json({
+    ok: true,
     mensaje: `${sincronizadas} órdenes sincronizadas correctamente`,
     debug_total: ordersData.paging?.total ?? null
   })
