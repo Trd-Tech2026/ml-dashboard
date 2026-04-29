@@ -41,12 +41,12 @@ export async function GET(request: Request) {
   })
 
   const tokenData = await response.json()
-  console.log('ML token response:', JSON.stringify(tokenData))
 
   await supabase.from('ml_tokens').delete().eq('ml_user_id', state)
+  await supabase.from('ml_tokens').delete().eq('ml_user_id', String(tokenData.user_id))
 
   if (tokenData.access_token) {
-    await supabase.from('ml_tokens').upsert({
+    await supabase.from('ml_tokens').insert({
       ml_user_id: String(tokenData.user_id),
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
