@@ -1,7 +1,65 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 export const maxDuration = 60
+
+type TokenRow = {
+  ml_user_id: string
+  access_token: string
+  refresh_token: string
+  expires_at: string
+}
+
+// Refresca el access_token si está por vencer (margen de 5 min de seguridad)
+async function getValidToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
+  const expiresAt = new Date(tokenRow.expires_at).getTime()
+  const ahora = Date.now()
+  const margen = 5 * 60 * 1000 // 5 minutos
+
+  // Si todavía no vence, devolvemos el token actual
+  if (expiresAt > ahora + margen) {
+    return tokenRow.access_token
+  }
+
+  console.log('Token vencido o por vencer, refrescando...')
+
+  const refreshRes = await fetch('https://api.mercadolibre.com/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'refresh_token',
+      client_id: process.env.ML_CLIENT_ID,
+      client_secret: process.env.ML_CLIENT_SECRET,
+      refresh_token: tokenRow.refresh_token
+    })
+  })
+
+  const refreshData = await refreshRes.json()
+
+  if (!refreshData.access_token) {
+    console.log('Refresh falló:', JSON.stringify(refreshData))
+    return null
+  }
+
+  const nuevoExpiresAt = new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
+
+  const { error: updateError } = await supabase
+    .from('ml_tokens')
+    .update({
+      access_token: refreshData.access_token,
+      refresh_token: refreshData.refresh_token,
+      expires_at: nuevoExpiresAt
+    })
+    .eq('ml_user_id', tokenRow.ml_user_id)
+
+  if (updateError) {
+    console.log('Error guardando token nuevo:', JSON.stringify(updateError))
+    return null
+  }
+
+  console.log('Token refrescado OK')
+  return refreshData.access_token
+}
 
 export async function GET() {
   const supabase = createClient(
@@ -21,7 +79,12 @@ export async function GET() {
     return NextResponse.json({ error: 'No hay token de ML. Hacé login primero.' }, { status: 401 })
   }
 
-  const token = tokenData.access_token
+  const token = await getValidToken(supabase, tokenData as TokenRow)
+
+  if (!token) {
+    return NextResponse.json({ error: 'No se pudo refrescar el token. Hacé login de nuevo.' }, { status: 401 })
+  }
+
   const sellerId = tokenData.ml_user_id
 
   // Fecha desde la cual traer órdenes (últimos 90 días)
@@ -98,7 +161,6 @@ export async function GET() {
 
     console.log(`Página ${pagina} OK — ${sincronizadas}/${totalDisponible}`)
 
-    // Si esta página vino con menos órdenes que el límite, ya no hay más
     if (results.length < LIMIT) break
 
     offset += LIMIT
