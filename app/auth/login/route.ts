@@ -23,7 +23,9 @@ export async function GET() {
   const codeVerifier = generateCodeVerifier()
   const codeChallenge = await generateCodeChallenge(codeVerifier)
 
-  await supabase.from('ml_tokens').upsert({
+  await supabase.from('ml_tokens').delete().eq('ml_user_id', 'pending')
+  
+  await supabase.from('ml_tokens').insert({
     ml_user_id: 'pending',
     access_token: 'pending',
     refresh_token: codeVerifier,
