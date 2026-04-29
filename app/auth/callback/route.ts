@@ -4,8 +4,9 @@ import { createClient } from '@supabase/supabase-js'
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const code = searchParams.get('code')
+  const codeVerifier = searchParams.get('cv')
 
-  if (!code) {
+  if (!code || !codeVerifier) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
@@ -13,14 +14,6 @@ export async function GET(request: Request) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
-
-  const { data: pendingToken } = await supabase
-    .from('ml_tokens')
-    .select('refresh_token')
-    .eq('ml_user_id', 'pending')
-    .single()
-
-  const codeVerifier = pendingToken?.refresh_token
 
   const response = await fetch('https://api.mercadolibre.com/oauth/token', {
     method: 'POST',
@@ -30,7 +23,7 @@ export async function GET(request: Request) {
       client_id: process.env.ML_CLIENT_ID,
       client_secret: process.env.ML_CLIENT_SECRET,
       code,
-      redirect_uri: process.env.ML_REDIRECT_URI,
+      redirect_uri: `${process.env.ML_REDIRECT_URI}?cv=${codeVerifier}`,
       code_verifier: codeVerifier
     })
   })
@@ -44,8 +37,6 @@ export async function GET(request: Request) {
       refresh_token: tokenData.refresh_token,
       expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
     })
-
-    await supabase.from('ml_tokens').delete().eq('ml_user_id', 'pending')
   }
 
   return NextResponse.redirect(new URL('/dashboard', request.url))
