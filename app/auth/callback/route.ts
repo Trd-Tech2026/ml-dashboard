@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 
 export async function GET(request: Request) {
@@ -6,27 +7,20 @@ export async function GET(request: Request) {
   const code = searchParams.get('code')
   const state = searchParams.get('state')
 
-  if (!code || !state) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+  const jar = await cookies()
+  const codeVerifier = jar.get('ml_pkce_verifier')?.value
+  const savedState = jar.get('ml_oauth_state')?.value
+
+  if (!code || !state || !codeVerifier || !savedState) {
+    return NextResponse.redirect(new URL('/hoy?error=missing_oauth_data', request.url))
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  )
-
-  const { data: pendingToken } = await supabase
-    .from('ml_tokens')
-    .select('refresh_token')
-    .eq('ml_user_id', state)
-    .single()
-
-  if (!pendingToken) {
-    console.log('No pending token found for state:', state)
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+  if (state !== savedState) {
+    return NextResponse.redirect(new URL('/hoy?error=state_mismatch', request.url))
   }
 
-  const codeVerifier = pendingToken.refresh_token
+  jar.delete('ml_pkce_verifier')
+  jar.delete('ml_oauth_state')
 
   const response = await fetch('https://api.mercadolibre.com/oauth/token', {
     method: 'POST',
@@ -42,23 +36,28 @@ export async function GET(request: Request) {
   })
 
   const tokenData = await response.json()
-  console.log('Token data:', JSON.stringify(tokenData))
 
-  await supabase.from('ml_tokens').delete().eq('ml_user_id', state)
-  await supabase.from('ml_tokens').delete().eq('ml_user_id', String(tokenData.user_id))
+  if (!tokenData.access_token) {
+    console.log('Error obteniendo token:', JSON.stringify(tokenData))
+    return NextResponse.redirect(new URL('/hoy?error=token_exchange_failed', request.url))
+  }
 
-  const insertData = {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+
+  const { error: insertError } = await supabase.from('ml_tokens').upsert({
     ml_user_id: String(tokenData.user_id),
     access_token: tokenData.access_token,
     refresh_token: tokenData.refresh_token,
     expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
-  }
-  
-  console.log('Inserting:', JSON.stringify(insertData))
-  
-  const { error } = await supabase.from('ml_tokens').insert(insertData)
-  
-  console.log('Insert error:', JSON.stringify(error))
+  }, { onConflict: 'ml_user_id' })
 
-  return NextResponse.redirect(new URL('/dashboard', request.url))
+  if (insertError) {
+    console.log('Error guardando token:', JSON.stringify(insertError))
+    return NextResponse.redirect(new URL('/hoy?error=db_save_failed', request.url))
+  }
+
+  return NextResponse.redirect(new URL('/hoy', request.url))
 }
