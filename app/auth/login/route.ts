@@ -32,7 +32,7 @@ export async function GET() {
     expires_at: new Date(Date.now() + 600000).toISOString()
   })
 
-  const url = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${process.env.ML_CLIENT_ID}&redirect_uri=${process.env.ML_REDIRECT_URI}&code_challenge=${codeChallenge}&code_challenge_method=S256&state=${state}`
+  const url = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${process.env.ML_CLIENT_ID}&redirect_uri=${process.env.ML_REDIRECT_URI}&code_challenge=${codeChallenge}&code_challenge_method=S256&state=${state}&scope=offline_access`
 
   return NextResponse.redirect(url)
 }
