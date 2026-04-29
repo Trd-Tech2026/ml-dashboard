@@ -17,19 +17,26 @@ export default async function Dashboard() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  const { data: orders } = await supabase
+  // KPIs: traer TODAS las órdenes (solo columnas necesarias para que sea rápido)
+  const { data: todas } = await supabase
+    .from('orders')
+    .select('status, total_amount')
+    .limit(10000)
+
+  const todasOrdenes = (todas ?? []) as Pick<Order, 'status' | 'total_amount'>[]
+  const ventasPagadas = todasOrdenes.filter(o => o.status === 'paid')
+  const cancelaciones = todasOrdenes.filter(o => o.status === 'cancelled')
+  const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
+  const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
+
+  // Tabla: solo las 100 más recientes
+  const { data: recientes } = await supabase
     .from('orders')
     .select('*')
     .order('date_created', { ascending: false })
     .limit(100)
 
-  const ordenes = (orders ?? []) as Order[]
-
-  const ventasPagadas = ordenes.filter(o => o.status === 'paid')
-  const cancelaciones = ordenes.filter(o => o.status === 'cancelled')
-
-  const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
-  const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
+  const ordenes = (recientes ?? []) as Order[]
 
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
@@ -52,7 +59,7 @@ export default async function Dashboard() {
     }}>
       <h1 style={{ color: '#333', marginBottom: '4px' }}>Dashboard ML Full</h1>
       <p style={{ color: '#666', marginBottom: '32px' }}>
-        Conectado con Mercado Libre ✅
+        Conectado con Mercado Libre ✅ — Sincronizadas {todasOrdenes.length} órdenes (últimos 90 días)
       </p>
 
       <div style={{
@@ -88,7 +95,7 @@ export default async function Dashboard() {
         borderRadius: '12px',
         padding: '24px'
       }}>
-        <h2 style={{ margin: '0 0 16px', color: '#333' }}>Últimas ventas</h2>
+        <h2 style={{ margin: '0 0 16px', color: '#333' }}>Últimas 100 ventas</h2>
 
         {ordenes.length === 0 ? (
           <p style={{ color: '#999' }}>
