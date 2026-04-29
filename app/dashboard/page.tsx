@@ -17,17 +17,31 @@ export default async function Dashboard() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  const { data: todas } = await supabase
-    .from('orders')
-    .select('status, total_amount')
-    .range(0, 49999)
+  // KPIs: traer TODAS las órdenes paginando manualmente (Supabase capea a 1000 por request)
+  const todasOrdenes: Pick<Order, 'status' | 'total_amount'>[] = []
+  let from = 0
+  const PAGE_SIZE = 1000
+  while (true) {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('status, total_amount')
+      .range(from, from + PAGE_SIZE - 1)
 
-  const todasOrdenes = (todas ?? []) as Pick<Order, 'status' | 'total_amount'>[]
+    if (error) break
+    if (!data || data.length === 0) break
+
+    todasOrdenes.push(...(data as Pick<Order, 'status' | 'total_amount'>[]))
+
+    if (data.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+
   const ventasPagadas = todasOrdenes.filter(o => o.status === 'paid')
   const cancelaciones = todasOrdenes.filter(o => o.status === 'cancelled')
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
+  // Tabla: solo las 100 más recientes
   const { data: recientes } = await supabase
     .from('orders')
     .select('*')
