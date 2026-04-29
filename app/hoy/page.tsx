@@ -14,17 +14,14 @@ type Order = {
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
-// Devuelve el inicio del día actual en hora Argentina, en formato ISO UTC
 function inicioDiaArgentinaISO(): string {
   const ahora = new Date()
-  // Formateamos como YYYY-MM-DD en zona Argentina
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(ahora) // ej: "2026-04-29"
-  // Construimos el inicio del día Argentina (00:00 ART = 03:00 UTC)
+  }).format(ahora)
   return new Date(`${fechaAR}T00:00:00-03:00`).toISOString()
 }
 
@@ -71,104 +68,261 @@ export default async function Hoy() {
     return '#FF9800'
   }
 
+  const cards = [
+    { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: '#4CAF50' },
+    { titulo: 'Facturación', valor: formatARS(facturacion), color: '#2196F3' },
+    { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: '#FF9800' },
+    { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: '#f44336' },
+  ]
+
   return (
-    <div style={{ padding: '40px', minHeight: '100vh' }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: '32px',
-      }}>
+    <div className="page">
+      <div className="header">
         <div>
-          <h1 style={{ color: '#333', margin: '0 0 4px' }}>Ventas de hoy</h1>
-          <p style={{ color: '#666', margin: 0, textTransform: 'capitalize' }}>
-            {fechaHoy}
-          </p>
+          <h1>Ventas de hoy</h1>
+          <p className="fecha">{fechaHoy}</p>
         </div>
         <BotonSync />
       </div>
 
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: '16px',
-        marginBottom: '32px'
-      }}>
-        {[
-          { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: '#4CAF50' },
-          { titulo: 'Facturación del día', valor: formatARS(facturacion), color: '#2196F3' },
-          { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: '#FF9800' },
-          { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: '#f44336' },
-        ].map((card) => (
-          <div key={card.titulo} style={{
-            backgroundColor: 'white',
-            borderRadius: '12px',
-            padding: '24px',
-            borderTop: `4px solid ${card.color}`
-          }}>
-            <p style={{ color: '#666', fontSize: '14px', margin: '0 0 8px' }}>
-              {card.titulo}
-            </p>
-            <p style={{ fontSize: '28px', fontWeight: 'bold', margin: 0 }}>
-              {card.valor}
-            </p>
+      <div className="kpis">
+        {cards.map((card) => (
+          <div key={card.titulo} className="kpi-card" style={{ borderTop: `4px solid ${card.color}` }}>
+            <p className="kpi-titulo">{card.titulo}</p>
+            <p className="kpi-valor">{card.valor}</p>
           </div>
         ))}
       </div>
 
-      <div style={{
-        backgroundColor: 'white',
-        borderRadius: '12px',
-        padding: '24px'
-      }}>
-        <h2 style={{ margin: '0 0 16px', color: '#333' }}>
-          Detalle ({ordenes.length} {ordenes.length === 1 ? 'venta' : 'ventas'})
-        </h2>
+      <div className="tabla-container">
+        <h2>Detalle ({ordenes.length} {ordenes.length === 1 ? 'venta' : 'ventas'})</h2>
 
         {ordenes.length === 0 ? (
-          <p style={{ color: '#999' }}>
+          <p className="empty">
             Todavía no hay ventas hoy. Apretá &quot;Actualizar ventas&quot; para sincronizar.
           </p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '2px solid #eee', textAlign: 'left' }}>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Hora</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Order ID</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Comprador</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px' }}>Estado</th>
-                  <th style={{ padding: '12px 8px', color: '#666', fontSize: '13px', textAlign: 'right' }}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ordenes.map((o) => (
-                  <tr key={o.order_id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                    <td style={{ padding: '12px 8px', fontSize: '14px' }}>{formatHora(o.date_created)}</td>
-                    <td style={{ padding: '12px 8px', fontSize: '13px', color: '#666' }}>{o.order_id}</td>
-                    <td style={{ padding: '12px 8px', fontSize: '14px' }}>{o.buyer_nickname ?? '-'}</td>
-                    <td style={{ padding: '12px 8px' }}>
-                      <span style={{
-                        backgroundColor: colorStatus(o.status),
-                        color: 'white',
-                        padding: '4px 10px',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 'bold'
-                      }}>
-                        {o.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px 8px', fontSize: '14px', textAlign: 'right', fontWeight: 'bold' }}>
-                      {formatARS(Number(o.total_amount ?? 0))}
-                    </td>
+          <>
+            <div className="tabla-desktop">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Hora</th>
+                    <th>Order ID</th>
+                    <th>Comprador</th>
+                    <th>Estado</th>
+                    <th style={{ textAlign: 'right' }}>Total</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {ordenes.map((o) => (
+                    <tr key={o.order_id}>
+                      <td>{formatHora(o.date_created)}</td>
+                      <td className="order-id">{o.order_id}</td>
+                      <td>{o.buyer_nickname ?? '-'}</td>
+                      <td>
+                        <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
+                          {o.status}
+                        </span>
+                      </td>
+                      <td className="total">{formatARS(Number(o.total_amount ?? 0))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="cards-mobile">
+              {ordenes.map((o) => (
+                <div key={o.order_id} className="venta-card">
+                  <div className="venta-card-row">
+                    <span className="venta-hora">{formatHora(o.date_created)}</span>
+                    <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
+                      {o.status}
+                    </span>
+                  </div>
+                  <div className="venta-comprador">{o.buyer_nickname ?? '-'}</div>
+                  <div className="venta-card-row">
+                    <span className="venta-orderid">#{o.order_id}</span>
+                    <span className="venta-total">{formatARS(Number(o.total_amount ?? 0))}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
+
+      <style>{`
+        .page {
+          padding: 40px;
+          min-height: 100vh;
+        }
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 32px;
+          gap: 16px;
+        }
+        .header h1 {
+          color: #333;
+          margin: 0 0 4px;
+        }
+        .fecha {
+          color: #666;
+          margin: 0;
+          text-transform: capitalize;
+        }
+        .kpis {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 32px;
+        }
+        .kpi-card {
+          background-color: white;
+          border-radius: 12px;
+          padding: 24px;
+        }
+        .kpi-titulo {
+          color: #666;
+          font-size: 14px;
+          margin: 0 0 8px;
+        }
+        .kpi-valor {
+          font-size: 28px;
+          font-weight: bold;
+          margin: 0;
+        }
+        .tabla-container {
+          background-color: white;
+          border-radius: 12px;
+          padding: 24px;
+        }
+        .tabla-container h2 {
+          margin: 0 0 16px;
+          color: #333;
+        }
+        .empty {
+          color: #999;
+        }
+        .tabla-desktop table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        .tabla-desktop thead tr {
+          border-bottom: 2px solid #eee;
+          text-align: left;
+        }
+        .tabla-desktop th {
+          padding: 12px 8px;
+          color: #666;
+          font-size: 13px;
+        }
+        .tabla-desktop tbody tr {
+          border-bottom: 1px solid #f0f0f0;
+        }
+        .tabla-desktop td {
+          padding: 12px 8px;
+          font-size: 14px;
+        }
+        .order-id {
+          font-size: 13px;
+          color: #666;
+        }
+        .total {
+          text-align: right;
+          font-weight: bold;
+        }
+        .badge {
+          color: white;
+          padding: 4px 10px;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: bold;
+          display: inline-block;
+        }
+        .cards-mobile {
+          display: none;
+        }
+
+        @media (max-width: 768px) {
+          .page {
+            padding: 16px;
+          }
+          .header {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 16px;
+          }
+          .header h1 {
+            font-size: 22px;
+          }
+          .fecha {
+            font-size: 13px;
+          }
+          .kpis {
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+          }
+          .kpi-card {
+            padding: 14px;
+          }
+          .kpi-titulo {
+            font-size: 12px;
+            margin-bottom: 4px;
+          }
+          .kpi-valor {
+            font-size: 20px;
+          }
+          .tabla-container {
+            padding: 16px;
+          }
+          .tabla-container h2 {
+            font-size: 16px;
+          }
+          .tabla-desktop {
+            display: none;
+          }
+          .cards-mobile {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+          }
+          .venta-card {
+            background-color: #fafafa;
+            border-radius: 10px;
+            padding: 12px 14px;
+            border: 1px solid #eee;
+          }
+          .venta-card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .venta-hora {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+          }
+          .venta-comprador {
+            font-size: 14px;
+            color: #555;
+            margin: 6px 0;
+          }
+          .venta-orderid {
+            font-size: 12px;
+            color: #999;
+          }
+          .venta-total {
+            font-size: 15px;
+            font-weight: bold;
+            color: #333;
+          }
+        }
+      `}</style>
     </div>
   )
 }
