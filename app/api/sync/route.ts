@@ -10,6 +10,15 @@ type TokenRow = {
   expires_at: string
 }
 
+// 🔧 NUEVO: helper robusto. Acepta cualquier ISO (con micros, con Z, con +00:00)
+// y devuelve el formato que ML acepta sí o sí.
+function toMLDate(input: string | Date): string {
+  const d = typeof input === 'string' ? new Date(input) : input
+  // toISOString siempre da YYYY-MM-DDTHH:mm:ss.sssZ (3 dígitos, Z al final)
+  // ML acepta UTC con sufijo -00:00
+  return d.toISOString().replace('Z', '-00:00')
+}
+
 async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
   console.log('Refrescando token...')
 
@@ -82,21 +91,30 @@ export async function GET() {
   const lastSyncAt: string | null = syncStateData?.last_sync_at ?? null
   const inicioSync = new Date().toISOString()
 
-  // ML requiere formato ISO sin milisegundos: YYYY-MM-DDTHH:mm:ss.000-00:00
-  const formatearFechaParaML = (iso: string) => {
-    return iso.replace(/\.\d{3}Z$/, '.000-00:00').replace(/\.\d{3}\+00:00$/, '.000-00:00')
-  }
+  // 🔧 CAMBIO: armamos los params con URLSearchParams (encodea solo, sin riesgo)
+  const buildUrl = (offset: number): { url: string; modo: string } => {
+    const params = new URLSearchParams({
+      seller: sellerId,
+      sort: 'date_desc',
+      limit: String(LIMIT),
+      offset: String(offset),
+    })
 
-  let filtroML: string
-  let modoSync: string
-  if (lastSyncAt) {
-    filtroML = `order.date_last_updated.from=${formatearFechaParaML(lastSyncAt)}`
-    modoSync = 'incremental'
-  } else {
-    const desde = new Date()
-    desde.setDate(desde.getDate() - 90)
-    filtroML = `order.date_created.from=${formatearFechaParaML(desde.toISOString())}`
-    modoSync = 'inicial-90d'
+    let modo: string
+    if (lastSyncAt) {
+      params.set('order.date_last_updated.from', toMLDate(lastSyncAt))
+      modo = 'incremental'
+    } else {
+      const desde = new Date()
+      desde.setDate(desde.getDate() - 90)
+      params.set('order.date_created.from', toMLDate(desde))
+      modo = 'inicial-90d'
+    }
+
+    return {
+      url: `https://api.mercadolibre.com/orders/search?${params.toString()}`,
+      modo
+    }
   }
 
   const LIMIT = 50
@@ -107,11 +125,14 @@ export async function GET() {
   let pagina = 0
   let huboError = false
   let yaRefresque = false
+  let modoSync = ''
 
   while (pagina < MAX_PAGES) {
     pagina++
 
-    const url = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&${filtroML}&sort=date_desc&limit=${LIMIT}&offset=${offset}`
+    // 🔧 CAMBIO: usamos buildUrl en cada iteración
+    const { url, modo } = buildUrl(offset)
+    modoSync = modo
 
     let ordersRes = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` }
