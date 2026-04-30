@@ -17,33 +17,27 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // ✅ Autorizado: llamar al endpoint de sync existente
+  // ✅ Autorizado: disparar el sync sin esperar respuesta (fire-and-forget)
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://ml-dashboard-rust.vercel.app'
 
-  console.log('[cron] Iniciando sync automático...')
-  const inicio = Date.now()
+  console.log('[cron] Disparando sync automático (fire-and-forget)...')
 
-  try {
-    const res = await fetch(`${baseUrl}/api/sync`, {
-      method: 'GET',
-      cache: 'no-store'
+  // Fire-and-forget: no usamos await, dejamos que corra en segundo plano
+  fetch(`${baseUrl}/api/sync`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+    .then(async (res) => {
+      const data = await res.json()
+      console.log('[cron] Sync terminó OK:', JSON.stringify(data))
+    })
+    .catch((err) => {
+      console.log('[cron] Sync falló:', String(err))
     })
 
-    const data = await res.json()
-    const duracionMs = Date.now() - inicio
-
-    console.log(`[cron] Sync completado en ${duracionMs}ms:`, JSON.stringify(data))
-
-    return NextResponse.json({
-      ok: true,
-      duracion_ms: duracionMs,
-      sync_result: data
-    })
-  } catch (error) {
-    console.log('[cron] Error ejecutando sync:', error)
-    return NextResponse.json({
-      ok: false,
-      error: String(error)
-    }, { status: 500 })
-  }
+  // Devolvemos 202 inmediatamente (en menos de 100ms)
+  return NextResponse.json({
+    ok: true,
+    mensaje: 'Sync disparado en segundo plano'
+  }, { status: 202 })
 }
