@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import BotonSync from '../components/BotonSync'
+import BotonSync from '../../components/BotonSync'
 
 export const dynamic = 'force-dynamic'
 

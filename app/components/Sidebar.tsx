@@ -23,10 +23,28 @@ export default function Sidebar() {
     return () => { document.body.style.overflow = '' }
   }, [open])
 
-  const items = [
-    { href: '/hoy', label: 'Hoy', icon: '🟢' },
-    { href: '/historicas', label: 'Históricas', icon: '📊' },
+  type Item = {
+    href: string
+    label: string
+    icon: string
+    soon?: boolean
+  }
+
+  const items: Item[] = [
+    { href: '/', label: 'Inicio', icon: '🏠' },
+    { href: '/ventas/hoy', label: 'Ventas hoy', icon: '🟢' },
+    { href: '/ventas/historicas', label: 'Históricas', icon: '📊' },
+    { href: '/stock', label: 'Stock', icon: '📦', soon: true },
+    { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰', soon: true },
   ]
+
+  // Una ruta está activa si coincide exacto, o si la actual empieza con esa ruta
+  // (ej: /ventas/hoy debería marcar "Ventas hoy" como activo).
+  // Excepción: la home "/" solo se marca si el pathname es exactamente "/".
+  const isActive = (href: string) => {
+    if (href === '/') return pathname === '/'
+    return pathname === href || pathname.startsWith(href + '/')
+  }
 
   return (
     <>
@@ -59,7 +77,7 @@ export default function Sidebar() {
         </div>
         <nav>
           {items.map((item) => {
-            const activo = pathname === item.href
+            const activo = isActive(item.href)
             return (
               <Link
                 key={item.href}
@@ -67,7 +85,8 @@ export default function Sidebar() {
                 className={`sidebar-link ${activo ? 'activo' : ''}`}
               >
                 <span>{item.icon}</span>
-                <span>{item.label}</span>
+                <span style={{ flex: 1 }}>{item.label}</span>
+                {item.soon && <span className="badge-soon">Pronto</span>}
               </Link>
             )
           })}
@@ -148,6 +167,15 @@ export default function Sidebar() {
           background-color: #2a2a2a;
           border-left-color: #4CAF50;
           font-weight: bold;
+        }
+        .badge-soon {
+          font-size: 10px;
+          background: #444;
+          color: #ccc;
+          padding: 2px 8px;
+          border-radius: 10px;
+          font-weight: normal;
+          letter-spacing: 0.5px;
         }
 
         @media (max-width: 768px) {
