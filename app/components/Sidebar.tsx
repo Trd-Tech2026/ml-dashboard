@@ -31,12 +31,11 @@ export default function Sidebar() {
   }
 
   const items: Item[] = [
-    { href: '/', label: 'Inicio', icon: '🏠' },
-    { href: '/ventas/hoy', label: 'Ventas hoy', icon: '🟢' },
-    { href: '/ventas/historicas', label: 'Históricas', icon: '📊' },
-    { href: '/stock', label: 'Stock', icon: '📦', soon: true },
-    { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰', soon: true },
-  ]
+  { href: '/', label: 'Inicio', icon: '🏠' },
+  { href: '/ventas/hoy', label: 'Ventas', icon: '🛒' },
+  { href: '/stock', label: 'Stock', icon: '📦', soon: true },
+  { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰', soon: true },
+]
 
   // Una ruta está activa si coincide exacto, o si la actual empieza con esa ruta
   // (ej: /ventas/hoy debería marcar "Ventas hoy" como activo).
