@@ -68,7 +68,7 @@ export default function Home() {
           margin: 0 auto;
         }
         .hub-header {
-          margin-bottom: 40px;
+          margin-bottom: 32px;
         }
         .hub-header h1 {
           margin: 0 0 8px;
@@ -155,6 +155,54 @@ export default function Home() {
         @media (min-width: 768px) {
           .cards {
             grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+          }
+        }
+
+        /* 📱 Mobile: cards más compactas */
+        @media (max-width: 768px) {
+          .hub {
+            padding: 16px 16px 32px;
+          }
+          .hub-header {
+            margin-bottom: 20px;
+          }
+          .hub-header h1 {
+            font-size: 24px;
+          }
+          .hub-header p {
+            font-size: 14px;
+          }
+          .cards {
+            gap: 12px;
+          }
+          .card {
+            padding: 16px;
+            gap: 14px;
+            border-radius: 10px;
+          }
+          .card-icon {
+            width: 44px;
+            height: 44px;
+            font-size: 22px;
+            border-radius: 10px;
+          }
+          .card-body h2 {
+            font-size: 17px;
+          }
+          .card-title-row {
+            margin-bottom: 4px;
+            gap: 8px;
+          }
+          .card-body p {
+            font-size: 13px;
+            line-height: 1.4;
+          }
+          .badge {
+            font-size: 10px;
+            padding: 2px 8px;
+          }
+          .card-arrow {
+            font-size: 18px;
           }
         }
       `}</style>

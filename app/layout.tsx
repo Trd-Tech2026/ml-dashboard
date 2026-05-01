@@ -28,10 +28,13 @@ export default function RootLayout({
           </main>
         </div>
         <style>{`
-          .layout-root {
-            display: flex;
-            min-height: 100vh;
-          }
+  html, body {
+    background-color: #f5f5f5;
+  }
+  .layout-root {
+    display: flex;
+    min-height: 100vh;
+  }
           .layout-main {
             flex: 1;
             background-color: #f5f5f5;
