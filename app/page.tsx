@@ -160,9 +160,9 @@ export default function Home() {
 
         /* 📱 Mobile: cards más compactas */
         @media (max-width: 768px) {
-          .hub {
-            padding: 16px 16px 32px;
-          }
+  .hub {
+    padding: 56px 16px 32px;
+  }
           .hub-header {
             margin-bottom: 20px;
           }
