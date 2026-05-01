@@ -17,14 +17,14 @@ export async function GET(request: Request) {
   const logistic = searchParams.get('logistic') ?? 'all'
   const stockFilter = searchParams.get('stock') ?? 'all'
   const sort = searchParams.get('sort') ?? 'stock_desc'
-  const archivedView = searchParams.get('archived') ?? 'false'  // 'false' | 'true' | 'all'
+  const archivedView = searchParams.get('archived') ?? 'false'
   const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10))
   const pageSize = Math.min(100, Math.max(10, parseInt(searchParams.get('pageSize') ?? '50', 10)))
 
   // ---- Query principal ----
   let query = supabase
     .from('items')
-    .select('item_id, title, thumbnail, permalink, available_quantity, sold_quantity, price, currency, status, logistic_type, free_shipping, seller_sku, last_updated, archived', { count: 'exact' })
+    .select('item_id, title, thumbnail, permalink, available_quantity, sold_quantity, price, currency, status, logistic_type, free_shipping, shipping_tags, is_flex, seller_sku, last_updated, archived', { count: 'exact' })
 
   // Filtro de archivado
   if (archivedView === 'true') {
@@ -32,7 +32,6 @@ export async function GET(request: Request) {
   } else if (archivedView === 'false') {
     query = query.eq('archived', false)
   }
-  // 'all' no filtra
 
   // Búsqueda
   if (search) {
@@ -45,9 +44,11 @@ export async function GET(request: Request) {
     query = query.eq('status', status)
   }
 
-  // Logística
+  // Logística — Flex es especial: matchea por flag is_flex (incluye coexistencia)
   if (logistic !== 'all') {
-    if (logistic === 'null') {
+    if (logistic === 'flex') {
+      query = query.eq('is_flex', true)
+    } else if (logistic === 'null') {
       query = query.is('logistic_type', null)
     } else {
       query = query.eq('logistic_type', logistic)

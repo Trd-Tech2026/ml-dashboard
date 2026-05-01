@@ -15,6 +15,8 @@ type Item = {
   status: string
   logistic_type: string | null
   free_shipping: boolean
+  shipping_tags: string[]
+  is_flex: boolean
   seller_sku: string | null
   last_updated: string | null
   archived: boolean
@@ -349,7 +351,7 @@ export default function StockPage() {
 
           <select value={logistic} onChange={(e) => setLogistic(e.target.value)}>
             <option value="all">Todo envío</option>
-            <option value="self_service">Flex</option>
+            <option value="flex">Flex (incluye coexistencia)</option>
             <option value="fulfillment">Full</option>
             <option value="cross_docking">Colecta</option>
             <option value="drop_off">A domicilio</option>
@@ -440,9 +442,17 @@ export default function StockPage() {
                     </span>
                   </td>
                   <td>
-                    <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>
-                      {statusLabel(item.status)}
-                    </span>
+                    <div className="logistic-badges">
+                      <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>
+                        {logisticLabel(item.logistic_type)}
+                      </span>
+                      {item.is_flex && item.logistic_type !== 'self_service' && (
+                        <span className="logistic-badge logistic-flex">⚡ Flex</span>
+                      )}
+                      {item.free_shipping && (
+                        <span className="logistic-badge logistic-free">🆓</span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     {item.permalink && (
@@ -489,7 +499,13 @@ export default function StockPage() {
                 <div><span className="stat-label">Precio</span> {formatearPrecio(item.price, item.currency)}</div>
               </div>
               <div className="card-bottom">
-                <span className="logistic-badge">{logisticLabel(item.logistic_type)}{item.free_shipping && ' 🆓'}</span>
+                <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>
+                  {logisticLabel(item.logistic_type)}
+                </span>
+                {item.is_flex && item.logistic_type !== 'self_service' && (
+                  <span className="logistic-badge logistic-flex">⚡ Flex</span>
+                )}
+                {item.free_shipping && <span className="logistic-badge logistic-free">🆓</span>}
                 <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>{statusLabel(item.status)}</span>
                 {item.permalink && (
                   <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
@@ -732,6 +748,11 @@ export default function StockPage() {
         .sku { font-size: 11px; color: #888; font-family: monospace; margin-top: 2px; }
         .td-stock strong { font-size: 16px; }
 
+        .logistic-badges {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
         .logistic-badge {
           display: inline-block;
           padding: 3px 8px;
@@ -740,6 +761,28 @@ export default function StockPage() {
           border-radius: 6px;
           font-size: 12px;
           white-space: nowrap;
+        }
+        .logistic-flex {
+          background: #fff3e0;
+          color: #e65100;
+          font-weight: 600;
+        }
+        .logistic-fulfillment {
+          background: #e8f5e9;
+          color: #2e7d32;
+          font-weight: 600;
+        }
+        .logistic-cross_docking {
+          background: #e3f2fd;
+          color: #1565c0;
+        }
+        .logistic-drop_off {
+          background: #f3e5f5;
+          color: #6a1b9a;
+        }
+        .logistic-free {
+          background: #e1f5fe;
+          color: #0277bd;
         }
         .status-badge {
           display: inline-block;
