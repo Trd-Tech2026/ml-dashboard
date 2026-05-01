@@ -10,9 +10,6 @@ type TokenRow = {
   expires_at: string
 }
 
-// =========================================================
-// Helper: refrescar token (mismo patrón que /api/sync)
-// =========================================================
 async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
   console.log('[sync-items] Refrescando token...')
 
@@ -54,21 +51,22 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
   return refreshData.access_token
 }
 
-// =========================================================
-// Helper: extraer SKU del array de attributes de ML
-// =========================================================
 function extractSellerSku(attributes: Array<{ id: string; value_name?: string }> | undefined): string | null {
   if (!attributes || !Array.isArray(attributes)) return null
   const skuAttr = attributes.find(a => a.id === 'SELLER_SKU')
   return skuAttr?.value_name ?? null
 }
 
-// =========================================================
-// Helper: fetch con retry automático si el token está vencido
-// =========================================================
+// Determina si un item tiene Flex activo (ya sea como logistic_type principal
+// o como modalidad adicional vía el tag 'self_service_in').
+function isFlexEnabled(logisticType: string | null, tags: string[]): boolean {
+  if (logisticType === 'self_service') return true
+  if (tags.includes('self_service_in')) return true
+  return false
+}
+
 async function fetchWithAuth(
   url: string,
-  token: string,
   supabase: SupabaseClient,
   tokenRow: TokenRow,
   state: { token: string; refreshed: boolean }
@@ -92,9 +90,6 @@ async function fetchWithAuth(
   return { res, data }
 }
 
-// =========================================================
-// MAIN
-// =========================================================
 export async function GET() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -103,7 +98,6 @@ export async function GET() {
 
   const inicioSync = new Date().toISOString()
 
-  // 1. Obtener token de ML
   const { data: tokenData } = await supabase
     .from('ml_tokens')
     .select('*')
@@ -118,18 +112,12 @@ export async function GET() {
 
   const tokenRow = tokenData as TokenRow
   const sellerId = tokenRow.ml_user_id
-
-  // Estado de auth (mutable, lo comparten todas las llamadas)
   const authState = { token: tokenRow.access_token, refreshed: false }
 
-  // ===========================================================
-  // 2. PASO 1: obtener TODOS los IDs de publicaciones del vendedor
-  // ===========================================================
-  // ML devuelve solo IDs en este endpoint, en páginas de hasta 100.
-  // Vamos a iterar con scan_id para soportar grandes catálogos (>1000 items).
+  // PASO 1: obtener todos los IDs
   const allItemIds: string[] = []
   const SCROLL_LIMIT = 100
-  const MAX_SCROLL_PAGES = 50  // hasta 5000 items, suficiente margen
+  const MAX_SCROLL_PAGES = 50
   let scrollId: string | null = null
   let scrollPage = 0
 
@@ -146,7 +134,7 @@ export async function GET() {
 
     let pageData: any
     try {
-      const { res, data } = await fetchWithAuth(url, authState.token, supabase, tokenRow, authState)
+      const { res, data } = await fetchWithAuth(url, supabase, tokenRow, authState)
       if (res.status !== 200) {
         console.log('[sync-items] Error obteniendo IDs (página', scrollPage, '):', JSON.stringify(data))
         return NextResponse.json({
@@ -166,7 +154,6 @@ export async function GET() {
 
     console.log(`[sync-items] Scroll página ${scrollPage}: ${ids.length} IDs (total acumulado: ${allItemIds.length})`)
 
-    // Si vinieron menos de SCROLL_LIMIT o no hay scroll_id, terminamos
     if (ids.length < SCROLL_LIMIT || !scrollId) break
   }
 
@@ -180,9 +167,7 @@ export async function GET() {
     })
   }
 
-  // ===========================================================
-  // 3. PASO 2: traer detalles en bloques de 20 (multi-get)
-  // ===========================================================
+  // PASO 2: traer detalles en bloques de 20
   const BATCH_SIZE = 20
   const itemsToUpsert: any[] = []
   let huboError = false
@@ -196,7 +181,7 @@ export async function GET() {
     const url = `https://api.mercadolibre.com/items?ids=${idsParam}&attributes=${encodeURIComponent(attrs)}`
 
     try {
-      const { res, data } = await fetchWithAuth(url, authState.token, supabase, tokenRow, authState)
+      const { res, data } = await fetchWithAuth(url, supabase, tokenRow, authState)
 
       if (res.status !== 200) {
         console.log(`[sync-items] Error en batch ${i / BATCH_SIZE + 1}:`, JSON.stringify(data))
@@ -204,7 +189,6 @@ export async function GET() {
         continue
       }
 
-      // El response es un array de { code: 200, body: {...} }
       if (!Array.isArray(data)) {
         console.log(`[sync-items] Respuesta inesperada en batch ${i / BATCH_SIZE + 1}`)
         detailsErrors++
@@ -217,6 +201,8 @@ export async function GET() {
 
         const logisticType = item.shipping?.logistic_type ?? null
         const freeShipping = item.shipping?.free_shipping ?? false
+        const shippingTags: string[] = Array.isArray(item.shipping?.tags) ? item.shipping.tags : []
+        const isFlex = isFlexEnabled(logisticType, shippingTags)
 
         itemsToUpsert.push({
           item_id: item.id,
@@ -233,6 +219,8 @@ export async function GET() {
           category_id: item.category_id ?? null,
           logistic_type: logisticType,
           free_shipping: freeShipping,
+          shipping_tags: shippingTags,
+          is_flex: isFlex,
           seller_sku: extractSellerSku(item.attributes),
           date_created: item.date_created ?? null,
           last_updated: item.last_updated ?? null,
@@ -247,9 +235,7 @@ export async function GET() {
 
   console.log(`[sync-items] Items a guardar: ${itemsToUpsert.length} (errores en batches: ${detailsErrors})`)
 
-  // ===========================================================
-  // 4. PASO 3: bulk upsert a Supabase (de a 500 por batch)
-  // ===========================================================
+  // PASO 3: bulk upsert
   const UPSERT_BATCH = 500
   let totalUpserted = 0
 
@@ -267,9 +253,6 @@ export async function GET() {
     totalUpserted += slice.length
   }
 
-  // ===========================================================
-  // 5. Actualizar sync_state_items
-  // ===========================================================
   if (!huboError) {
     await supabase
       .from('sync_state_items')
