@@ -17,6 +17,7 @@ type Item = {
   free_shipping: boolean
   seller_sku: string | null
   last_updated: string | null
+  archived: boolean
 }
 
 type Kpis = {
@@ -24,6 +25,7 @@ type Kpis = {
   sin_stock: number
   critico: number
   stock_total: number
+  archived_count: number
 }
 
 type SyncState = {
@@ -37,6 +39,7 @@ type ApiResponse = {
   page: number
   pageSize: number
   totalFiltered: number
+  archivedView: string
   kpis: Kpis
   sync_state: SyncState
 }
@@ -102,6 +105,7 @@ export default function StockPage() {
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refrescando, setRefrescando] = useState(false)
+  const [archivando, setArchivando] = useState(false)
 
   // Filtros
   const [search, setSearch] = useState('')
@@ -110,8 +114,12 @@ export default function StockPage() {
   const [logistic, setLogistic] = useState('all')
   const [stockFilter, setStockFilter] = useState('all')
   const [sort, setSort] = useState('stock_desc')
+  const [showArchived, setShowArchived] = useState(false)
   const [page, setPage] = useState(1)
   const pageSize = 50
+
+  // Selección de items (Set para performance)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
   // Cargar items
   const fetchItems = useCallback(async () => {
@@ -122,6 +130,7 @@ export default function StockPage() {
       logistic,
       stock: stockFilter,
       sort,
+      archived: showArchived ? 'true' : 'false',
       page: String(page),
       pageSize: String(pageSize),
     })
@@ -134,24 +143,29 @@ export default function StockPage() {
     } finally {
       setLoading(false)
     }
-  }, [search, status, logistic, stockFilter, sort, page])
+  }, [search, status, logistic, stockFilter, sort, showArchived, page])
 
   useEffect(() => {
     fetchItems()
   }, [fetchItems])
 
-  // Volver a página 1 cuando cambia un filtro (no cuando cambia page)
+  // Volver a página 1 cuando cambia un filtro
   useEffect(() => {
     setPage(1)
-  }, [search, status, logistic, stockFilter, sort])
+  }, [search, status, logistic, stockFilter, sort, showArchived])
 
-  // Buscar al apretar Enter o al hacer click en buscar
+  // Limpiar selección al cambiar entre vistas (archivadas / no archivadas)
+  useEffect(() => {
+    setSelected(new Set())
+  }, [showArchived])
+
+  // ===== Búsqueda =====
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setSearch(searchInput.trim())
   }
 
-  // Forzar sync nuevo
+  // ===== Refresh stock (sync) =====
   const handleRefresh = async () => {
     setRefrescando(true)
     try {
@@ -166,17 +180,83 @@ export default function StockPage() {
     }
   }
 
-  const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0 }
+  // ===== Selección =====
+  const toggleSelect = (itemId: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+
+  const selectAllInPage = () => {
+    const pageIds = (data?.items ?? []).map(i => i.item_id)
+    const todosSeleccionados = pageIds.every(id => selected.has(id))
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (todosSeleccionados) {
+        // Deseleccionar los de esta página
+        pageIds.forEach(id => next.delete(id))
+      } else {
+        // Seleccionar los de esta página
+        pageIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
+  const clearSelection = () => setSelected(new Set())
+
+  // ===== Archivar / Desarchivar =====
+  const handleArchive = async (archive: boolean) => {
+    if (selected.size === 0) return
+
+    const action = archive ? 'archivar' : 'desarchivar'
+    const confirmed = window.confirm(
+      `¿${action.charAt(0).toUpperCase() + action.slice(1)} ${selected.size} publicación${selected.size === 1 ? '' : 'es'}?`
+    )
+    if (!confirmed) return
+
+    setArchivando(true)
+    try {
+      const res = await fetch('/api/stock/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item_ids: Array.from(selected),
+          archived: archive,
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) {
+        alert(`Error: ${json.error ?? 'desconocido'}`)
+        return
+      }
+      console.log(`${action}: ${json.affected} items afectados`)
+      setSelected(new Set())
+      await fetchItems()
+    } catch (err) {
+      console.error(`Error al ${action}:`, err)
+      alert(`Error al ${action}`)
+    } finally {
+      setArchivando(false)
+    }
+  }
+
+  const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0, archived_count: 0 }
   const items = data?.items ?? []
   const totalFiltered = data?.totalFiltered ?? 0
   const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize))
+
+  const todosEnPaginaSeleccionados = items.length > 0 && items.every(i => selected.has(i.item_id))
 
   return (
     <div className="stock-page">
       {/* HEADER */}
       <div className="header">
         <div>
-          <h1>Stock</h1>
+          <h1>{showArchived ? '🗄️ Stock archivado' : 'Stock'}</h1>
           <p className="subtitle">
             {data?.sync_state?.last_sync_at
               ? `Última sincronización: ${formatearFecha(data.sync_state.last_sync_at)}`
@@ -207,6 +287,35 @@ export default function StockPage() {
           <div className="kpi-value">{kpis.sin_stock.toLocaleString('es-AR')}</div>
         </div>
       </div>
+
+      {/* Toggle "Mostrar archivadas" */}
+      <div className="archived-toggle">
+        <label className="toggle-label">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          <span>Mostrar archivadas {kpis.archived_count > 0 && `(${kpis.archived_count})`}</span>
+        </label>
+      </div>
+
+      {/* BARRA DE ACCIÓN — solo si hay selección */}
+      {selected.size > 0 && (
+        <div className="action-bar">
+          <span className="action-text">
+            <strong>{selected.size}</strong> seleccionada{selected.size === 1 ? '' : 's'}
+          </span>
+          <button className="btn-action" onClick={() => handleArchive(!showArchived)} disabled={archivando}>
+            {archivando
+              ? '⏳ Procesando...'
+              : showArchived
+                ? '↩️ Desarchivar seleccionadas'
+                : '🗄️ Archivar seleccionadas'}
+          </button>
+          <button className="btn-clear-sel" onClick={clearSelection}>Limpiar selección</button>
+        </div>
+      )}
 
       {/* FILTROS */}
       <div className="filtros">
@@ -267,7 +376,10 @@ export default function StockPage() {
 
       {/* CONTADOR */}
       <div className="counter">
-        {loading ? 'Cargando...' : `Mostrando ${items.length} de ${totalFiltered.toLocaleString('es-AR')} publicaciones`}
+        {loading
+          ? 'Cargando...'
+          : `Mostrando ${items.length} de ${totalFiltered.toLocaleString('es-AR')} publicaciones${showArchived ? ' archivadas' : ''}`
+        }
       </div>
 
       {/* TABLA (desktop) */}
@@ -275,6 +387,14 @@ export default function StockPage() {
         <table className="tabla">
           <thead>
             <tr>
+              <th className="col-check">
+                <input
+                  type="checkbox"
+                  checked={todosEnPaginaSeleccionados}
+                  onChange={selectAllInPage}
+                  aria-label="Seleccionar todos"
+                />
+              </th>
               <th>Foto</th>
               <th>Título / SKU</th>
               <th>Stock</th>
@@ -286,73 +406,98 @@ export default function StockPage() {
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
-              <tr key={item.item_id} className={stockClass(item.available_quantity)}>
-                <td>
-                  {item.thumbnail
-                    ? <img src={item.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
-                    : <div className="thumb-placeholder">📦</div>
-                  }
-                </td>
-                <td className="td-title">
-                  <div className="title-text">{item.title}</div>
-                  {item.seller_sku && <div className="sku">SKU: {item.seller_sku}</div>}
-                </td>
-                <td className="td-stock"><strong>{item.available_quantity}</strong></td>
-                <td>{item.sold_quantity}</td>
-                <td>{formatearPrecio(item.price, item.currency)}</td>
-                <td>
-                  <span className="logistic-badge">
-                    {logisticLabel(item.logistic_type)}
-                    {item.free_shipping && ' 🆓'}
-                  </span>
-                </td>
-                <td>
-                  <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>
-                    {statusLabel(item.status)}
-                  </span>
-                </td>
-                <td>
-                  {item.permalink && (
-                    <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">
-                      Ver →
-                    </a>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {items.map((item) => {
+              const isSelected = selected.has(item.item_id)
+              return (
+                <tr
+                  key={item.item_id}
+                  className={`${stockClass(item.available_quantity)} ${isSelected ? 'fila-selected' : ''}`}
+                >
+                  <td className="col-check">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelect(item.item_id)}
+                    />
+                  </td>
+                  <td>
+                    {item.thumbnail
+                      ? <img src={item.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
+                      : <div className="thumb-placeholder">📦</div>
+                    }
+                  </td>
+                  <td className="td-title">
+                    <div className="title-text">{item.title}</div>
+                    {item.seller_sku && <div className="sku">SKU: {item.seller_sku}</div>}
+                  </td>
+                  <td className="td-stock"><strong>{item.available_quantity}</strong></td>
+                  <td>{item.sold_quantity}</td>
+                  <td>{formatearPrecio(item.price, item.currency)}</td>
+                  <td>
+                    <span className="logistic-badge">
+                      {logisticLabel(item.logistic_type)}
+                      {item.free_shipping && ' 🆓'}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>
+                      {statusLabel(item.status)}
+                    </span>
+                  </td>
+                  <td>
+                    {item.permalink && (
+                      <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">
+                        Ver →
+                      </a>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
 
       {/* CARDS (mobile) */}
       <div className="cards-mobile">
-        {items.map((item) => (
-          <div key={item.item_id} className={`card-item ${stockClass(item.available_quantity)}`}>
-            <div className="card-top">
-              {item.thumbnail
-                ? <img src={item.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
-                : <div className="thumb-placeholder">📦</div>
-              }
-              <div className="card-info">
-                <div className="card-title">{item.title}</div>
-                {item.seller_sku && <div className="sku">SKU: {item.seller_sku}</div>}
+        {items.map((item) => {
+          const isSelected = selected.has(item.item_id)
+          return (
+            <div
+              key={item.item_id}
+              className={`card-item ${stockClass(item.available_quantity)} ${isSelected ? 'card-selected' : ''}`}
+            >
+              <div className="card-top">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleSelect(item.item_id)}
+                  className="card-checkbox"
+                />
+                {item.thumbnail
+                  ? <img src={item.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
+                  : <div className="thumb-placeholder">📦</div>
+                }
+                <div className="card-info">
+                  <div className="card-title">{item.title}</div>
+                  {item.seller_sku && <div className="sku">SKU: {item.seller_sku}</div>}
+                </div>
+              </div>
+              <div className="card-stats">
+                <div><span className="stat-label">Stock</span> <strong>{item.available_quantity}</strong></div>
+                <div><span className="stat-label">Vendidos</span> {item.sold_quantity}</div>
+                <div><span className="stat-label">Precio</span> {formatearPrecio(item.price, item.currency)}</div>
+              </div>
+              <div className="card-bottom">
+                <span className="logistic-badge">{logisticLabel(item.logistic_type)}{item.free_shipping && ' 🆓'}</span>
+                <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>{statusLabel(item.status)}</span>
+                {item.permalink && (
+                  <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
+                )}
               </div>
             </div>
-            <div className="card-stats">
-              <div><span className="stat-label">Stock</span> <strong>{item.available_quantity}</strong></div>
-              <div><span className="stat-label">Vendidos</span> {item.sold_quantity}</div>
-              <div><span className="stat-label">Precio</span> {formatearPrecio(item.price, item.currency)}</div>
-            </div>
-            <div className="card-bottom">
-              <span className="logistic-badge">{logisticLabel(item.logistic_type)}{item.free_shipping && ' 🆓'}</span>
-              <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>{statusLabel(item.status)}</span>
-              {item.permalink && (
-                <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
-              )}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* PAGINACIÓN */}
@@ -368,7 +513,7 @@ export default function StockPage() {
 
       {!loading && items.length === 0 && (
         <div className="empty">
-          <p>No se encontraron publicaciones con esos filtros.</p>
+          <p>{showArchived ? 'No hay publicaciones archivadas con esos filtros.' : 'No se encontraron publicaciones con esos filtros.'}</p>
         </div>
       )}
 
@@ -406,20 +551,15 @@ export default function StockPage() {
           cursor: pointer;
           white-space: nowrap;
         }
-        .btn-refresh:hover:not(:disabled) {
-          background: #45a049;
-        }
-        .btn-refresh:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
+        .btn-refresh:hover:not(:disabled) { background: #45a049; }
+        .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
 
         /* KPIs */
         .kpis {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
           gap: 12px;
-          margin-bottom: 24px;
+          margin-bottom: 16px;
         }
         .kpi {
           background: white;
@@ -431,16 +571,62 @@ export default function StockPage() {
         .kpi-green { border-top-color: #4CAF50; }
         .kpi-yellow { border-top-color: #FF9800; }
         .kpi-red { border-top-color: #f44336; }
-        .kpi-label {
-          font-size: 12px;
-          color: #666;
-          margin-bottom: 6px;
+        .kpi-label { font-size: 12px; color: #666; margin-bottom: 6px; }
+        .kpi-value { font-size: 24px; font-weight: 700; color: #1a1a1a; }
+
+        /* Toggle archivadas */
+        .archived-toggle {
+          margin-bottom: 12px;
         }
-        .kpi-value {
-          font-size: 24px;
-          font-weight: 700;
-          color: #1a1a1a;
+        .toggle-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: white;
+          padding: 8px 14px;
+          border-radius: 8px;
+          font-size: 13px;
+          color: #555;
+          cursor: pointer;
+          user-select: none;
         }
+        .toggle-label input { cursor: pointer; }
+
+        /* Action bar (cuando hay selección) */
+        .action-bar {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          background: #1a1a1a;
+          color: white;
+          padding: 12px 16px;
+          border-radius: 10px;
+          margin-bottom: 16px;
+          flex-wrap: wrap;
+        }
+        .action-text { flex: 1; font-size: 14px; }
+        .btn-action {
+          background: #FF9800;
+          color: white;
+          border: none;
+          padding: 8px 16px;
+          border-radius: 6px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .btn-action:hover:not(:disabled) { background: #f57c00; }
+        .btn-action:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-clear-sel {
+          background: transparent;
+          color: #ccc;
+          border: 1px solid #555;
+          padding: 8px 14px;
+          border-radius: 6px;
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .btn-clear-sel:hover { color: white; border-color: #888; }
 
         /* Filtros */
         .filtros {
@@ -452,10 +638,7 @@ export default function StockPage() {
           flex-direction: column;
           gap: 12px;
         }
-        .search-form {
-          display: flex;
-          gap: 8px;
-        }
+        .search-form { display: flex; gap: 8px; }
         .search-input {
           flex: 1;
           padding: 10px 14px;
@@ -480,11 +663,7 @@ export default function StockPage() {
           border-radius: 8px;
           cursor: pointer;
         }
-        .dropdowns {
-          display: flex;
-          gap: 8px;
-          flex-wrap: wrap;
-        }
+        .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
         .dropdowns select {
           padding: 8px 12px;
           border: 1px solid #ddd;
@@ -495,12 +674,7 @@ export default function StockPage() {
           min-width: 140px;
         }
 
-        /* Contador */
-        .counter {
-          font-size: 13px;
-          color: #666;
-          margin-bottom: 12px;
-        }
+        .counter { font-size: 13px; color: #666; margin-bottom: 12px; }
 
         /* Tabla */
         .tabla-wrapper {
@@ -509,10 +683,7 @@ export default function StockPage() {
           overflow: hidden;
           overflow-x: auto;
         }
-        .tabla {
-          width: 100%;
-          border-collapse: collapse;
-        }
+        .tabla { width: 100%; border-collapse: collapse; }
         .tabla th {
           background: #fafafa;
           padding: 12px 16px;
@@ -535,17 +706,19 @@ export default function StockPage() {
         .tabla tr.stock-zero .td-stock strong { color: #d32f2f; }
         .tabla tr.stock-low { background: #fffbf0; }
         .tabla tr.stock-low .td-stock strong { color: #e65100; }
+        .tabla tr.fila-selected { background: #e3f2fd !important; }
+
+        .col-check { width: 32px; text-align: center; }
+        .col-check input { cursor: pointer; transform: scale(1.2); }
 
         .thumb {
-          width: 48px;
-          height: 48px;
+          width: 48px; height: 48px;
           object-fit: cover;
           border-radius: 6px;
           background: #f5f5f5;
         }
         .thumb-placeholder {
-          width: 48px;
-          height: 48px;
+          width: 48px; height: 48px;
           background: #f5f5f5;
           border-radius: 6px;
           display: flex;
@@ -555,17 +728,8 @@ export default function StockPage() {
         }
 
         .td-title { max-width: 380px; }
-        .title-text {
-          font-weight: 500;
-          color: #1a1a1a;
-          line-height: 1.3;
-        }
-        .sku {
-          font-size: 11px;
-          color: #888;
-          font-family: monospace;
-          margin-top: 2px;
-        }
+        .title-text { font-weight: 500; color: #1a1a1a; line-height: 1.3; }
+        .sku { font-size: 11px; color: #888; font-family: monospace; margin-top: 2px; }
         .td-stock strong { font-size: 16px; }
 
         .logistic-badge {
@@ -613,15 +777,8 @@ export default function StockPage() {
           cursor: pointer;
           font-size: 14px;
         }
-        .paginacion button:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-        }
-        .paginacion span {
-          font-size: 14px;
-          color: #555;
-          padding: 0 12px;
-        }
+        .paginacion button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .paginacion span { font-size: 14px; color: #555; padding: 0 12px; }
 
         .empty {
           background: white;
@@ -634,9 +791,7 @@ export default function StockPage() {
 
         /* MOBILE */
         @media (max-width: 768px) {
-          .stock-page {
-            padding: 16px;
-          }
+          .stock-page { padding: 16px; }
           .header {
             flex-direction: column;
             align-items: stretch;
@@ -645,15 +800,17 @@ export default function StockPage() {
           .header h1 { font-size: 22px; }
           .btn-refresh { width: 100%; }
 
-          .kpis {
-            grid-template-columns: repeat(2, 1fr);
-          }
+          .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 20px; }
 
-          .dropdowns select {
-            flex: 1;
-            min-width: 0;
+          .action-bar {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
           }
+          .action-bar > * { width: 100%; }
+
+          .dropdowns select { flex: 1; min-width: 0; }
 
           .tabla-wrapper { display: none; }
           .cards-mobile { display: flex; flex-direction: column; gap: 12px; }
@@ -664,10 +821,20 @@ export default function StockPage() {
           }
           .card-item.stock-zero { background: #fff5f5; }
           .card-item.stock-low { background: #fffbf0; }
+          .card-item.card-selected {
+            outline: 2px solid #2196F3;
+            outline-offset: -2px;
+          }
           .card-top {
             display: flex;
             gap: 12px;
             margin-bottom: 12px;
+            align-items: flex-start;
+          }
+          .card-checkbox {
+            transform: scale(1.3);
+            margin-top: 14px;
+            cursor: pointer;
           }
           .card-info { flex: 1; min-width: 0; }
           .card-title {
