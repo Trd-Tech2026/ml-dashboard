@@ -96,7 +96,7 @@ export default async function Historicas({ searchParams }: Props) {
           return (
             <Link
               key={r.value}
-              href={`/historicas?rango=${r.value}`}
+              href={`/ventas/historicas?rango=${r.value}`}
               className={`filtro ${activo ? 'activo' : ''}`}
             >
               <span className="label-desktop">Últimos {r.label}</span>
