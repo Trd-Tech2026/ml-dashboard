@@ -17,6 +17,9 @@ export type OrderWithItems = {
   currency: string
   buyer_nickname: string | null
   date_created: string
+  marketplace_fee: number
+  shipping_cost: number
+  net_received: number
   items: OrderItem[]
 }
 
@@ -154,6 +157,35 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                               ))}
                             </tbody>
                           </table>
+
+                          {/* Desglose financiero */}
+                          {o.net_received > 0 && (
+                            <div className="vt-financial">
+                              <div className="vt-financial-row">
+                                <span className="vt-fin-label">Total cobrado al comprador</span>
+                                <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
+                              </div>
+                              {o.marketplace_fee > 0 && (
+                                <div className="vt-financial-row vt-fin-deduct">
+                                  <span className="vt-fin-label">— Comisión ML + impuestos</span>
+                                  <span className="vt-fin-value">−{formatARS(o.marketplace_fee)}</span>
+                                </div>
+                              )}
+                              {o.shipping_cost > 0 && (
+                                <div className="vt-financial-row vt-fin-deduct">
+                                  <span className="vt-fin-label">— Costo de envío</span>
+                                  <span className="vt-fin-value">−{formatARS(o.shipping_cost)}</span>
+                                </div>
+                              )}
+                              <div className="vt-financial-row vt-fin-total">
+                                <span className="vt-fin-label">💰 Recibís</span>
+                                <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                              </div>
+                            </div>
+                          )}
+                          {o.net_received === 0 && o.status === 'paid' && (
+                            <div className="vt-no-data">Datos financieros no disponibles para esta orden.</div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -205,6 +237,34 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                       </div>
                     </div>
                   ))}
+                  {/* Desglose financiero mobile */}
+                  {o.net_received > 0 && (
+                    <div className="vt-financial">
+                      <div className="vt-financial-row">
+                        <span className="vt-fin-label">Total</span>
+                        <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
+                      </div>
+                      {o.marketplace_fee > 0 && (
+                        <div className="vt-financial-row vt-fin-deduct">
+                          <span className="vt-fin-label">— ML + impuestos</span>
+                          <span className="vt-fin-value">−{formatARS(o.marketplace_fee)}</span>
+                        </div>
+                      )}
+                      {o.shipping_cost > 0 && (
+                        <div className="vt-financial-row vt-fin-deduct">
+                          <span className="vt-fin-label">— Envío</span>
+                          <span className="vt-fin-value">−{formatARS(o.shipping_cost)}</span>
+                        </div>
+                      )}
+                      <div className="vt-financial-row vt-fin-total">
+                        <span className="vt-fin-label">💰 Recibís</span>
+                        <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                      </div>
+                    </div>
+                  )}
+                  {o.net_received === 0 && o.status === 'paid' && (
+                    <div className="vt-no-data">Datos financieros no disponibles.</div>
+                  )}
                 </div>
               )}
             </div>
@@ -341,6 +401,53 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-family: monospace;
           font-size: 11px;
           color: #888;
+        }
+
+        /* Desglose financiero (Recibís) */
+        .vt-financial {
+          margin-top: 14px;
+          background: white;
+          border: 1px solid #e5e5e5;
+          border-radius: 8px;
+          padding: 12px 16px;
+        }
+        .vt-financial-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 6px 0;
+          font-size: 13px;
+          color: #555;
+        }
+        .vt-financial-row.vt-fin-deduct {
+          color: #d32f2f;
+        }
+        .vt-financial-row.vt-fin-total {
+          border-top: 2px solid #f0f0f0;
+          margin-top: 4px;
+          padding-top: 10px;
+          font-weight: 700;
+          color: #2e7d32;
+          font-size: 15px;
+        }
+        .vt-fin-label {
+          flex: 1;
+        }
+        .vt-fin-value {
+          font-family: monospace;
+          font-size: 14px;
+        }
+        .vt-fin-total .vt-fin-value {
+          font-size: 16px;
+        }
+        .vt-no-data {
+          margin-top: 12px;
+          padding: 8px 12px;
+          background: #fff3e0;
+          color: #e65100;
+          border-radius: 6px;
+          font-size: 12px;
+          text-align: center;
         }
 
         .vt-empty {

@@ -44,7 +44,7 @@ export default async function Historicas({ searchParams }: Props) {
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
-  // Para la tabla: las últimas 100 órdenes con sus items (join)
+  // Para la tabla: las últimas 100 órdenes con sus items + datos financieros
   const { data: recientesRaw } = await supabase
     .from('orders')
     .select(`
@@ -54,6 +54,9 @@ export default async function Historicas({ searchParams }: Props) {
       currency,
       buyer_nickname,
       date_created,
+      marketplace_fee,
+      shipping_cost,
+      net_received,
       order_items (
         item_id,
         title,
@@ -72,6 +75,9 @@ export default async function Historicas({ searchParams }: Props) {
     currency: o.currency,
     buyer_nickname: o.buyer_nickname,
     date_created: o.date_created,
+    marketplace_fee: Number(o.marketplace_fee ?? 0),
+    shipping_cost: Number(o.shipping_cost ?? 0),
+    net_received: Number(o.net_received ?? 0),
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
