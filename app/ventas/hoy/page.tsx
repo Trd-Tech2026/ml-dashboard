@@ -1,16 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
 import BotonSync from '../../components/BotonSync'
+import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
 
 export const dynamic = 'force-dynamic'
-
-type Order = {
-  order_id: number
-  status: string
-  total_amount: number
-  currency: string
-  buyer_nickname: string
-  date_created: string
-}
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
@@ -33,13 +25,36 @@ export default async function Hoy() {
 
   const inicioDiaISO = inicioDiaArgentinaISO()
 
-  const { data: ordenesHoy } = await supabase
+  // Traer órdenes con sus items en una sola query (Supabase soporta join via foreign key)
+  const { data: ordenesRaw } = await supabase
     .from('orders')
-    .select('*')
+    .select(`
+      order_id,
+      status,
+      total_amount,
+      currency,
+      buyer_nickname,
+      date_created,
+      order_items (
+        item_id,
+        title,
+        quantity,
+        unit_price
+      )
+    `)
     .gte('date_created', inicioDiaISO)
     .order('date_created', { ascending: false })
 
-  const ordenes = (ordenesHoy ?? []) as Order[]
+  // Mapear a la forma que espera el componente
+  const ordenes: OrderWithItems[] = (ordenesRaw ?? []).map((o: any) => ({
+    order_id: o.order_id,
+    status: o.status,
+    total_amount: Number(o.total_amount ?? 0),
+    currency: o.currency,
+    buyer_nickname: o.buyer_nickname,
+    date_created: o.date_created,
+    items: Array.isArray(o.order_items) ? o.order_items : [],
+  }))
 
   const ventasPagadas = ordenes.filter(o => o.status === 'paid')
   const cancelaciones = ordenes.filter(o => o.status === 'cancelled')
@@ -49,24 +64,10 @@ export default async function Hoy() {
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
-  const formatHora = (iso: string) =>
-    new Date(iso).toLocaleTimeString('es-AR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-      timeZone: TZ,
-    })
-
   const fechaHoy = new Date().toLocaleDateString('es-AR', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     timeZone: TZ,
   })
-
-  const colorStatus = (status: string) => {
-    if (status === 'paid') return '#4CAF50'
-    if (status === 'cancelled') return '#f44336'
-    return '#FF9800'
-  }
 
   const cards = [
     { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: '#4CAF50' },
@@ -102,54 +103,7 @@ export default async function Hoy() {
             Todavía no hay ventas hoy. Apretá &quot;Actualizar ventas&quot; para sincronizar.
           </p>
         ) : (
-          <>
-            <div className="tabla-desktop">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Hora</th>
-                    <th>Order ID</th>
-                    <th>Comprador</th>
-                    <th>Estado</th>
-                    <th style={{ textAlign: 'right' }}>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ordenes.map((o) => (
-                    <tr key={o.order_id}>
-                      <td>{formatHora(o.date_created)}</td>
-                      <td className="order-id">{o.order_id}</td>
-                      <td>{o.buyer_nickname ?? '-'}</td>
-                      <td>
-                        <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
-                          {o.status}
-                        </span>
-                      </td>
-                      <td className="total">{formatARS(Number(o.total_amount ?? 0))}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="cards-mobile">
-              {ordenes.map((o) => (
-                <div key={o.order_id} className="venta-card">
-                  <div className="venta-card-row">
-                    <span className="venta-hora">{formatHora(o.date_created)}</span>
-                    <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
-                      {o.status}
-                    </span>
-                  </div>
-                  <div className="venta-comprador">{o.buyer_nickname ?? '-'}</div>
-                  <div className="venta-card-row">
-                    <span className="venta-orderid">#{o.order_id}</span>
-                    <span className="venta-total">{formatARS(Number(o.total_amount ?? 0))}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
+          <VentasTabla ordenes={ordenes} mostrarHora={true} timeZone={TZ} />
         )}
       </div>
 
@@ -207,45 +161,6 @@ export default async function Hoy() {
         .empty {
           color: #999;
         }
-        .tabla-desktop table {
-          width: 100%;
-          border-collapse: collapse;
-        }
-        .tabla-desktop thead tr {
-          border-bottom: 2px solid #eee;
-          text-align: left;
-        }
-        .tabla-desktop th {
-          padding: 12px 8px;
-          color: #666;
-          font-size: 13px;
-        }
-        .tabla-desktop tbody tr {
-          border-bottom: 1px solid #f0f0f0;
-        }
-        .tabla-desktop td {
-          padding: 12px 8px;
-          font-size: 14px;
-        }
-        .order-id {
-          font-size: 13px;
-          color: #666;
-        }
-        .total {
-          text-align: right;
-          font-weight: bold;
-        }
-        .badge {
-          color: white;
-          padding: 4px 10px;
-          border-radius: 12px;
-          font-size: 12px;
-          font-weight: bold;
-          display: inline-block;
-        }
-        .cards-mobile {
-          display: none;
-        }
 
         @media (max-width: 768px) {
           .page {
@@ -282,44 +197,6 @@ export default async function Hoy() {
           }
           .tabla-container h2 {
             font-size: 16px;
-          }
-          .tabla-desktop {
-            display: none;
-          }
-          .cards-mobile {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-          }
-          .venta-card {
-            background-color: #fafafa;
-            border-radius: 10px;
-            padding: 12px 14px;
-            border: 1px solid #eee;
-          }
-          .venta-card-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          .venta-hora {
-            font-size: 14px;
-            font-weight: bold;
-            color: #333;
-          }
-          .venta-comprador {
-            font-size: 14px;
-            color: #555;
-            margin: 6px 0;
-          }
-          .venta-orderid {
-            font-size: 12px;
-            color: #999;
-          }
-          .venta-total {
-            font-size: 15px;
-            font-weight: bold;
-            color: #333;
           }
         }
       `}</style>

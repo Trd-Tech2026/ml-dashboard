@@ -1,16 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
 import Link from 'next/link'
+import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
 
 export const dynamic = 'force-dynamic'
-
-type Order = {
-  order_id: number
-  status: string
-  total_amount: number
-  currency: string
-  buyer_nickname: string
-  date_created: string
-}
 
 type Props = {
   searchParams: Promise<{ rango?: string }>
@@ -30,7 +22,8 @@ export default async function Historicas({ searchParams }: Props) {
   desde.setDate(desde.getDate() - dias)
   const desdeISO = desde.toISOString()
 
-  const todasOrdenes: Pick<Order, 'status' | 'total_amount'>[] = []
+  // Para los KPIs: solo status + total (eficiente con paginación)
+  const todasOrdenes: { status: string; total_amount: number }[] = []
   let from = 0
   const PAGE_SIZE = 1000
   while (true) {
@@ -41,7 +34,7 @@ export default async function Historicas({ searchParams }: Props) {
       .range(from, from + PAGE_SIZE - 1)
 
     if (error || !data || data.length === 0) break
-    todasOrdenes.push(...(data as Pick<Order, 'status' | 'total_amount'>[]))
+    todasOrdenes.push(...(data as { status: string; total_amount: number }[]))
     if (data.length < PAGE_SIZE) break
     from += PAGE_SIZE
   }
@@ -51,26 +44,39 @@ export default async function Historicas({ searchParams }: Props) {
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
-  const { data: recientes } = await supabase
+  // Para la tabla: las últimas 100 órdenes con sus items (join)
+  const { data: recientesRaw } = await supabase
     .from('orders')
-    .select('*')
+    .select(`
+      order_id,
+      status,
+      total_amount,
+      currency,
+      buyer_nickname,
+      date_created,
+      order_items (
+        item_id,
+        title,
+        quantity,
+        unit_price
+      )
+    `)
     .gte('date_created', desdeISO)
     .order('date_created', { ascending: false })
     .limit(100)
 
-  const ordenes = (recientes ?? []) as Order[]
+  const ordenes: OrderWithItems[] = (recientesRaw ?? []).map((o: any) => ({
+    order_id: o.order_id,
+    status: o.status,
+    total_amount: Number(o.total_amount ?? 0),
+    currency: o.currency,
+    buyer_nickname: o.buyer_nickname,
+    date_created: o.date_created,
+    items: Array.isArray(o.order_items) ? o.order_items : [],
+  }))
 
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
-
-  const formatFecha = (iso: string) =>
-    new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' })
-
-  const colorStatus = (status: string) => {
-    if (status === 'paid') return '#4CAF50'
-    if (status === 'cancelled') return '#f44336'
-    return '#FF9800'
-  }
 
   const rangos = [
     { value: '7', label: '7 días', labelMobile: '7d' },
@@ -122,56 +128,7 @@ export default async function Historicas({ searchParams }: Props) {
         {ordenes.length === 0 ? (
           <p className="empty">No hay ventas en este período.</p>
         ) : (
-          <>
-            {/* Tabla desktop */}
-            <div className="tabla-desktop">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Fecha</th>
-                    <th>Order ID</th>
-                    <th>Comprador</th>
-                    <th>Estado</th>
-                    <th style={{ textAlign: 'right' }}>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ordenes.map((o) => (
-                    <tr key={o.order_id}>
-                      <td>{formatFecha(o.date_created)}</td>
-                      <td className="order-id">{o.order_id}</td>
-                      <td>{o.buyer_nickname ?? '-'}</td>
-                      <td>
-                        <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
-                          {o.status}
-                        </span>
-                      </td>
-                      <td className="total">{formatARS(Number(o.total_amount ?? 0))}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Cards mobile */}
-            <div className="cards-mobile">
-              {ordenes.map((o) => (
-                <div key={o.order_id} className="venta-card">
-                  <div className="venta-card-row">
-                    <span className="venta-fecha">{formatFecha(o.date_created)}</span>
-                    <span className="badge" style={{ backgroundColor: colorStatus(o.status) }}>
-                      {o.status}
-                    </span>
-                  </div>
-                  <div className="venta-comprador">{o.buyer_nickname ?? '-'}</div>
-                  <div className="venta-card-row">
-                    <span className="venta-orderid">#{o.order_id}</span>
-                    <span className="venta-total">{formatARS(Number(o.total_amount ?? 0))}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
+          <VentasTabla ordenes={ordenes} mostrarHora={false} />
         )}
       </div>
 
@@ -250,45 +207,6 @@ export default async function Historicas({ searchParams }: Props) {
         .empty {
           color: #999;
         }
-        .tabla-desktop table {
-          width: 100%;
-          border-collapse: collapse;
-        }
-        .tabla-desktop thead tr {
-          border-bottom: 2px solid #eee;
-          text-align: left;
-        }
-        .tabla-desktop th {
-          padding: 12px 8px;
-          color: #666;
-          font-size: 13px;
-        }
-        .tabla-desktop tbody tr {
-          border-bottom: 1px solid #f0f0f0;
-        }
-        .tabla-desktop td {
-          padding: 12px 8px;
-          font-size: 14px;
-        }
-        .order-id {
-          font-size: 13px;
-          color: #666;
-        }
-        .total {
-          text-align: right;
-          font-weight: bold;
-        }
-        .badge {
-          color: white;
-          padding: 4px 10px;
-          border-radius: 12px;
-          font-size: 12px;
-          font-weight: bold;
-          display: inline-block;
-        }
-        .cards-mobile {
-          display: none;
-        }
 
         @media (max-width: 768px) {
           .page {
@@ -341,44 +259,6 @@ export default async function Historicas({ searchParams }: Props) {
           }
           .total-info {
             font-size: 12px;
-          }
-          .tabla-desktop {
-            display: none;
-          }
-          .cards-mobile {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-          }
-          .venta-card {
-            background-color: #fafafa;
-            border-radius: 10px;
-            padding: 12px 14px;
-            border: 1px solid #eee;
-          }
-          .venta-card-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          .venta-fecha {
-            font-size: 14px;
-            font-weight: bold;
-            color: #333;
-          }
-          .venta-comprador {
-            font-size: 14px;
-            color: #555;
-            margin: 6px 0;
-          }
-          .venta-orderid {
-            font-size: 12px;
-            color: #999;
-          }
-          .venta-total {
-            font-size: 15px;
-            font-weight: bold;
-            color: #333;
           }
         }
       `}</style>
