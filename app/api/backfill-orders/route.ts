@@ -68,18 +68,21 @@ async function fetchOrderDetail(orderId: number | string, token: string): Promis
     const res = await fetch(`https://api.mercadolibre.com/orders/${orderId}`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.status !== 200) return null
+    if (res.status !== 200) {
+      console.log(`[backfill] Orden ${orderId} status ${res.status}`)
+      return null
+    }
     return await res.json()
-  } catch {
+  } catch (e) {
+    console.log(`[backfill] Orden ${orderId} excepción:`, String(e))
     return null
   }
 }
 
-const CHUNK_SIZE = 100
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const chunkSize = Math.min(200, Math.max(20, parseInt(searchParams.get('chunk') ?? String(CHUNK_SIZE), 10)))
+  const chunkSize = Math.min(200, Math.max(20, parseInt(searchParams.get('chunk') ?? '100', 10)))
+  const debug = searchParams.get('debug') === '1'
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -102,11 +105,10 @@ export async function GET(request: Request) {
   const tokenRow = tokenData as TokenRow
   let token = tokenRow.access_token
 
-  // 2. Buscar órdenes que aún no tienen marketplace_fee cargado
-  // (las que se trajeron antes del cambio o quedaron en 0 por el bug viejo)
+  // 2. Buscar órdenes con fee=0
   const { data: ordersToFix, error: queryError } = await supabase
     .from('orders')
-    .select('order_id')
+    .select('order_id, total_amount, status')
     .eq('marketplace_fee', 0)
     .order('date_created', { ascending: false })
     .limit(chunkSize)
@@ -134,10 +136,9 @@ export async function GET(request: Request) {
 
   console.log(`[backfill] Procesando ${ordersToFix.length} de ${totalPending} pendientes...`)
 
-  // 3. Para cada orden, pedir detalle a ML
   const orderIds = ordersToFix.map(o => o.order_id)
 
-  // Chequeo de auth con la primera llamada (refresh si hace falta)
+  // Refresh preventivo si hay 401
   const firstCheck = await fetch(`https://api.mercadolibre.com/orders/${orderIds[0]}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
@@ -150,11 +151,12 @@ export async function GET(request: Request) {
     token = nuevoToken
   }
 
-  // Procesar en paralelo en sub-batches de 20 para no saturar
   const SUB_BATCH = 20
   let processed = 0
   let errors = 0
+  let updateErrors = 0
   const updates: any[] = []
+  const sampleDebug: any[] = []  // 🆕 muestras para debug
 
   for (let i = 0; i < orderIds.length; i += SUB_BATCH) {
     const slice = orderIds.slice(i, i + SUB_BATCH)
@@ -162,7 +164,6 @@ export async function GET(request: Request) {
     const detailsPromises = slice.map(id => fetchOrderDetail(id, token))
     const detalles = await Promise.all(detailsPromises)
 
-    // Para el shipping, solo si free_shipping
     const shippingPromises = detalles.map((d) => {
       if (!d) return Promise.resolve(0)
       const shippingId = d.shipping?.id
@@ -188,41 +189,67 @@ export async function GET(request: Request) {
         shipping_cost,
         net_received,
       })
+
+      // 🆕 guardamos los primeros 3 para devolverlos como muestra de debug
+      if (debug && sampleDebug.length < 3) {
+        sampleDebug.push({
+          order_id: d.id,
+          total,
+          marketplace_fee,
+          shipping_cost,
+          net_received,
+          payments_count: Array.isArray(d.payments) ? d.payments.length : 0,
+          payments_sample: Array.isArray(d.payments) ? d.payments.map((p: any) => ({
+            id: p.id,
+            transaction_amount: p.transaction_amount,
+            marketplace_fee: p.marketplace_fee,
+            shipping_cost: p.shipping_cost,
+            taxes_amount: p.taxes_amount,
+          })) : null,
+        })
+      }
       processed++
     })
   }
 
-  // 4. Update masivo en Supabase
-  // Como Supabase no tiene un "bulk update by id" directo, usamos upsert
-  // pero con merge para no pisar otros campos. Lo más simple y eficiente
-  // es un upsert que solo incluye los campos a actualizar — pero eso
-  // requeriría que el schema soporte upsert parcial.
-  // Hacemos updates uno por uno con Promise.all (es rápido en Supabase porque
-  // es una sola conexión persistente).
-  const updatePromises = updates.map(u =>
-    supabase
-      .from('orders')
-      .update({
-        marketplace_fee: u.marketplace_fee,
-        shipping_cost: u.shipping_cost,
-        net_received: u.net_received,
-      })
-      .eq('order_id', u.order_id)
+  // Updates con tracking de errores
+  const updateResults = await Promise.all(
+    updates.map(u =>
+      supabase
+        .from('orders')
+        .update({
+          marketplace_fee: u.marketplace_fee,
+          shipping_cost: u.shipping_cost,
+          net_received: u.net_received,
+        })
+        .eq('order_id', u.order_id)
+        .select('order_id')
+    )
   )
 
-  await Promise.all(updatePromises)
+  updateResults.forEach((r, idx) => {
+    if (r.error) {
+      console.log(`[backfill] Update error en ${updates[idx].order_id}:`, r.error.message)
+      updateErrors++
+    } else if (!r.data || r.data.length === 0) {
+      console.log(`[backfill] Update no afectó filas: ${updates[idx].order_id}`)
+      updateErrors++
+    }
+  })
 
   const remaining = Math.max(0, totalPending - processed)
 
   return NextResponse.json({
     ok: true,
     processed,
-    errors,
+    fetch_errors: errors,
+    update_errors: updateErrors,
     total_pending_at_start: totalPending,
     remaining,
     done: remaining === 0,
+    debug_sample: debug ? sampleDebug : undefined,
     mensaje: remaining === 0
       ? `✅ Backfill completo. Procesadas: ${processed}`
-      : `Procesadas ${processed}. Quedan ${remaining}. Volvé a llamar para continuar.`
+      : `Procesadas ${processed}. Quedan ${remaining}. Volvé a llamar.`
   })
 }
