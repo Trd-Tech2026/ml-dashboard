@@ -17,7 +17,6 @@ function toMLDate(input: string | Date): string {
 
 async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
   console.log('Refrescando token...')
-
   const refreshRes = await fetch('https://api.mercadolibre.com/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -28,16 +27,12 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
       refresh_token: tokenRow.refresh_token
     })
   })
-
   const refreshData = await refreshRes.json()
-
   if (!refreshData.access_token) {
     console.log('Refresh falló:', JSON.stringify(refreshData))
     return null
   }
-
   const nuevoExpiresAt = new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
-
   const { error: updateError } = await supabase
     .from('ml_tokens')
     .update({
@@ -46,23 +41,19 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
       expires_at: nuevoExpiresAt
     })
     .eq('ml_user_id', tokenRow.ml_user_id)
-
   if (updateError) {
     console.log('Error guardando token nuevo:', JSON.stringify(updateError))
     return null
   }
-
   console.log('Token refrescado OK')
   return refreshData.access_token
 }
 
-// Suma todos los marketplace_fee de los payments de una orden
 function sumarMarketplaceFee(payments: any[] | undefined): number {
   if (!Array.isArray(payments)) return 0
   return payments.reduce((acc, p) => acc + Number(p.marketplace_fee ?? 0), 0)
 }
 
-// Determina si el envío es gratis para el comprador (vendedor paga el envío)
 function envioGratisParaComprador(order: any): boolean {
   const tags: string[] = order.shipping?.tags ?? []
   return tags.includes('mandatory_free_shipping') ||
@@ -71,7 +62,6 @@ function envioGratisParaComprador(order: any): boolean {
          false
 }
 
-// Pide a ML el costo de envío (cost de la lista) de un shipping_id
 async function fetchShippingCost(shippingId: string | number, token: string): Promise<number> {
   try {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
@@ -79,11 +69,23 @@ async function fetchShippingCost(shippingId: string | number, token: string): Pr
     })
     if (res.status !== 200) return 0
     const data = await res.json()
-    // El campo "senders" trae el costo que paga el vendedor
     const senderCost = data?.senders?.[0]?.cost ?? data?.senders?.cost ?? 0
     return Number(senderCost) || 0
   } catch {
     return 0
+  }
+}
+
+// Pide el detalle completo de UNA orden (incluyendo payments con marketplace_fee)
+async function fetchOrderDetail(orderId: number | string, token: string): Promise<any | null> {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/orders/${orderId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return null
+    return await res.json()
+  } catch {
+    return null
   }
 }
 
@@ -125,7 +127,6 @@ export async function GET() {
       limit: String(LIMIT),
       offset: String(offset),
     })
-
     let modo: string
     if (lastSyncAt) {
       params.set('order.date_last_updated.from', toMLDate(lastSyncAt))
@@ -136,7 +137,6 @@ export async function GET() {
       params.set('order.date_created.from', toMLDate(desde))
       modo = 'inicial-90d'
     }
-
     return {
       url: `https://api.mercadolibre.com/orders/search?${params.toString()}`,
       modo
@@ -172,7 +172,6 @@ export async function GET() {
       }
       token = nuevoToken
       yaRefresque = true
-
       ordersRes = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -193,18 +192,25 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // Para cada orden, traer el costo de envío en paralelo (si tiene shipping y es free)
+    // 🆕 Para cada orden, traer el DETALLE COMPLETO (con marketplace_fee real)
+    // y el costo de envío en paralelo.
+    const detailsPromises = results.map((order: any) => fetchOrderDetail(order.id, token))
     const shippingPromises = results.map(async (order: any) => {
       const shippingId = order.shipping?.id
       const esFree = envioGratisParaComprador(order)
-      // Solo pedimos costo si el envío es gratis para el comprador (lo paga el vendedor)
       if (!shippingId || !esFree) return 0
       return fetchShippingCost(shippingId, token)
     })
-    const shippingCosts: number[] = await Promise.all(shippingPromises)
+
+    const [detalles, shippingCosts] = await Promise.all([
+      Promise.all(detailsPromises),
+      Promise.all(shippingPromises),
+    ])
 
     const ordersToInsert = results.map((order: any, idx: number) => {
-      const marketplace_fee = sumarMarketplaceFee(order.payments)
+      const detalle = detalles[idx]
+      // Usamos los payments del detalle (más completo). Si falla la consulta, fallback a 0.
+      const marketplace_fee = sumarMarketplaceFee(detalle?.payments)
       const shipping_cost = shippingCosts[idx] ?? 0
       const total = Number(order.total_amount ?? 0)
       const net_received = total - marketplace_fee - shipping_cost
