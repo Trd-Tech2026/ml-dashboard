@@ -36,7 +36,6 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
   return refreshData.access_token
 }
 
-// Trae detalles de una orden ML para sacar el payment_id y el shipping_id
 async function fetchMLOrder(orderId: number | string, token: string): Promise<any | null> {
   try {
     const res = await fetch(`https://api.mercadolibre.com/orders/${orderId}`, {
@@ -49,7 +48,6 @@ async function fetchMLOrder(orderId: number | string, token: string): Promise<an
   }
 }
 
-// Trae detalles de un pago Mercado Pago — acá vive el dato real
 async function fetchMPPayment(paymentId: number | string, token: string): Promise<any | null> {
   try {
     const res = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
@@ -86,7 +84,7 @@ async function fetchShippingCost(shippingId: string | number, token: string): Pr
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const chunkSize = Math.min(200, Math.max(20, parseInt(searchParams.get('chunk') ?? '50', 10)))
+  const chunkSize = Math.min(200, Math.max(10, parseInt(searchParams.get('chunk') ?? '50', 10)))
   const debug = searchParams.get('debug') === '1'
 
   const supabase = createClient(
@@ -109,21 +107,8 @@ export async function GET(request: Request) {
   const tokenRow = tokenData as TokenRow
   let token = tokenRow.access_token
 
-  // Buscar órdenes que aún tienen net_received == total_amount (sin actualizar todavía)
-  // O que tienen total_amount > 0 y net_received == 0 (las viejas iniciales)
-  // Mejor criterio: net_received >= total_amount (el dato real siempre es menor)
+  // Buscar órdenes pagadas que aún no tengan marketplace_fee cargado
   const { data: ordersToFix, error: queryError } = await supabase
-    .from('orders')
-    .select('order_id, total_amount, status')
-    .eq('status', 'paid')
-    .gte('net_received', supabase.rpc as any)  // workaround: lo hacemos con filtro distinto
-    .order('date_created', { ascending: false })
-    .limit(chunkSize)
-
-  // Hack más simple: filtrar por net_received >= total_amount con SQL crudo no es directo,
-  // así que filtramos por marketplace_fee = 0 (que es nuestro proxy de "no procesado")
-  // y agregamos status='paid' para no procesar canceladas (no tienen fee real útil)
-  const { data: realOrdersToFix } = await supabase
     .from('orders')
     .select('order_id, total_amount, status')
     .eq('marketplace_fee', 0)
@@ -135,15 +120,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: queryError.message }, { status: 500 })
   }
 
-  const orders = realOrdersToFix ?? []
+  const orders = ordersToFix ?? []
 
-  const pendingTotal = await supabase
+  // Total pendientes (todas las paid sin fee)
+  const { count: totalPending } = await supabase
     .from('orders')
     .select('order_id', { count: 'exact', head: true })
     .eq('marketplace_fee', 0)
     .eq('status', 'paid')
-
-  const totalPending = pendingTotal.count ?? 0
 
   if (orders.length === 0) {
     return NextResponse.json({
@@ -155,7 +139,7 @@ export async function GET(request: Request) {
     })
   }
 
-  console.log(`[backfill-mp] Procesando ${orders.length} de ${totalPending} pendientes...`)
+  console.log(`[backfill-mp] Procesando ${orders.length} de ${totalPending ?? '?'} pendientes...`)
 
   // Refresh preventivo
   const firstCheck = await fetch(`https://api.mercadolibre.com/orders/${orders[0].order_id}`, {
@@ -170,7 +154,6 @@ export async function GET(request: Request) {
     token = nuevoToken
   }
 
-  // Procesar en sub-batches de 10 (porque cada orden hace 2-3 calls: ML + MP + shipping)
   const SUB_BATCH = 10
   let processed = 0
   let fetchErrors = 0
@@ -180,7 +163,6 @@ export async function GET(request: Request) {
   for (let i = 0; i < orders.length; i += SUB_BATCH) {
     const slice = orders.slice(i, i + SUB_BATCH)
 
-    // Para cada orden: 1) traer detalle ML, 2) traer pago MP, 3) traer costo envío
     const updates = await Promise.all(slice.map(async (o) => {
       const orderDetail = await fetchMLOrder(o.order_id, token)
       if (!orderDetail) {
@@ -188,7 +170,6 @@ export async function GET(request: Request) {
         return null
       }
 
-      // Sumar marketplace_fee y net_amount de TODOS los pagos (puede haber varios)
       const payments = orderDetail.payments ?? []
       let total_marketplace_fee = 0
       let total_net_received = 0
@@ -199,14 +180,15 @@ export async function GET(request: Request) {
         const mp = await fetchMPPayment(p.id, token)
         if (!mp) continue
 
-        // marketplace_fee real: suma de fees con fee_payer = "collector" (el vendedor)
         const feesCollector = (mp.fee_details ?? [])
           .filter((f: any) => f.fee_payer === 'collector')
           .reduce((acc: number, f: any) => acc + Number(f.amount ?? 0), 0)
 
-        // Impuestos retenidos al collector (vendedor)
         const taxesCollector = (mp.charges_details ?? [])
-          .filter((c: any) => c.metadata?.mov_detail === 'tax_withholding_collector' || c.type === 'tax')
+          .filter((c: any) =>
+            c.metadata?.mov_detail === 'tax_withholding_collector' ||
+            (c.type === 'tax' && c.accounts?.from === 'collector')
+          )
           .reduce((acc: number, c: any) => acc + Number(c.amounts?.original ?? 0), 0)
 
         total_marketplace_fee += feesCollector + taxesCollector
@@ -214,7 +196,6 @@ export async function GET(request: Request) {
         total_payments_amount += Number(mp.transaction_amount ?? 0)
       }
 
-      // Costo envío (si free_shipping)
       let shipping_cost = 0
       const shippingId = orderDetail.shipping?.id
       if (shippingId && envioGratisParaComprador(orderDetail)) {
@@ -222,7 +203,6 @@ export async function GET(request: Request) {
       }
 
       const total = Number(o.total_amount ?? 0)
-      // Net received: lo que dice MP, menos el costo de envío que paga el vendedor
       const net_received = total_net_received - shipping_cost
 
       const update = {
@@ -246,7 +226,6 @@ export async function GET(request: Request) {
 
     const validUpdates = updates.filter((u): u is NonNullable<typeof u> => u !== null)
 
-    // Updates en paralelo
     const updateResults = await Promise.all(
       validUpdates.map(u =>
         supabase
@@ -271,14 +250,14 @@ export async function GET(request: Request) {
     })
   }
 
-  const remaining = Math.max(0, totalPending - processed)
+  const remaining = Math.max(0, (totalPending ?? 0) - processed)
 
   return NextResponse.json({
     ok: true,
     processed,
     fetch_errors: fetchErrors,
     update_errors: updateErrors,
-    total_pending_at_start: totalPending,
+    total_pending_at_start: totalPending ?? 0,
     remaining,
     done: remaining === 0,
     debug_sample: debug ? sampleDebug : undefined,
