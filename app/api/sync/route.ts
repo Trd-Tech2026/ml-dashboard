@@ -10,12 +10,8 @@ type TokenRow = {
   expires_at: string
 }
 
-// 🔧 NUEVO: helper robusto. Acepta cualquier ISO (con micros, con Z, con +00:00)
-// y devuelve el formato que ML acepta sí o sí.
 function toMLDate(input: string | Date): string {
   const d = typeof input === 'string' ? new Date(input) : input
-  // toISOString siempre da YYYY-MM-DDTHH:mm:ss.sssZ (3 dígitos, Z al final)
-  // ML acepta UTC con sufijo -00:00
   return d.toISOString().replace('Z', '-00:00')
 }
 
@@ -60,6 +56,37 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
   return refreshData.access_token
 }
 
+// Suma todos los marketplace_fee de los payments de una orden
+function sumarMarketplaceFee(payments: any[] | undefined): number {
+  if (!Array.isArray(payments)) return 0
+  return payments.reduce((acc, p) => acc + Number(p.marketplace_fee ?? 0), 0)
+}
+
+// Determina si el envío es gratis para el comprador (vendedor paga el envío)
+function envioGratisParaComprador(order: any): boolean {
+  const tags: string[] = order.shipping?.tags ?? []
+  return tags.includes('mandatory_free_shipping') ||
+         tags.includes('free_shipping') ||
+         order.shipping?.cost_components?.shipping_method === 'free' ||
+         false
+}
+
+// Pide a ML el costo de envío (cost de la lista) de un shipping_id
+async function fetchShippingCost(shippingId: string | number, token: string): Promise<number> {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return 0
+    const data = await res.json()
+    // El campo "senders" trae el costo que paga el vendedor
+    const senderCost = data?.senders?.[0]?.cost ?? data?.senders?.cost ?? 0
+    return Number(senderCost) || 0
+  } catch {
+    return 0
+  }
+}
+
 export async function GET() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -91,7 +118,6 @@ export async function GET() {
   const lastSyncAt: string | null = syncStateData?.last_sync_at ?? null
   const inicioSync = new Date().toISOString()
 
-  // 🔧 CAMBIO: armamos los params con URLSearchParams (encodea solo, sin riesgo)
   const buildUrl = (offset: number): { url: string; modo: string } => {
     const params = new URLSearchParams({
       seller: sellerId,
@@ -130,7 +156,6 @@ export async function GET() {
   while (pagina < MAX_PAGES) {
     pagina++
 
-    // 🔧 CAMBIO: usamos buildUrl en cada iteración
     const { url, modo } = buildUrl(offset)
     modoSync = modo
 
@@ -168,17 +193,37 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    const ordersToInsert = results.map((order: any) => ({
-      order_id: order.id,
-      status: order.status,
-      total_amount: order.total_amount,
-      currency: order.currency_id,
-      buyer_id: order.buyer.id,
-      buyer_nickname: order.buyer.nickname,
-      date_created: order.date_created,
-      date_closed: order.date_closed,
-      cancel_reason: order.cancel_detail?.description ?? null
-    }))
+    // Para cada orden, traer el costo de envío en paralelo (si tiene shipping y es free)
+    const shippingPromises = results.map(async (order: any) => {
+      const shippingId = order.shipping?.id
+      const esFree = envioGratisParaComprador(order)
+      // Solo pedimos costo si el envío es gratis para el comprador (lo paga el vendedor)
+      if (!shippingId || !esFree) return 0
+      return fetchShippingCost(shippingId, token)
+    })
+    const shippingCosts: number[] = await Promise.all(shippingPromises)
+
+    const ordersToInsert = results.map((order: any, idx: number) => {
+      const marketplace_fee = sumarMarketplaceFee(order.payments)
+      const shipping_cost = shippingCosts[idx] ?? 0
+      const total = Number(order.total_amount ?? 0)
+      const net_received = total - marketplace_fee - shipping_cost
+
+      return {
+        order_id: order.id,
+        status: order.status,
+        total_amount: total,
+        currency: order.currency_id,
+        buyer_id: order.buyer.id,
+        buyer_nickname: order.buyer.nickname,
+        date_created: order.date_created,
+        date_closed: order.date_closed,
+        cancel_reason: order.cancel_detail?.description ?? null,
+        marketplace_fee,
+        shipping_cost,
+        net_received,
+      }
+    })
 
     const itemsToInsert = results.flatMap((order: any) =>
       order.order_items.map((item: any) => ({
