@@ -59,32 +59,47 @@ async function fetchMPPayment(paymentId: number | string, token: string): Promis
   }
 }
 
-function calcularComponentes(mp: any) {
-  const charges = mp?.charges_details ?? []
-  let comision_ml = 0
-  let impuestos = 0
-  let envio = 0
+async function fetchShippingData(shippingId: string | number, token: string) {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return { costoSeller: 0, bonificacion: 0 }
+    const data = await res.json()
 
-  for (const c of charges) {
-    const amount = Number(c.amounts?.original ?? 0)
-    const tipo = c.type
-    if (tipo === 'fee') comision_ml += amount
-    else if (tipo === 'tax') impuestos += amount
-    else if (tipo === 'shipping') envio += amount
+    const costoSeller = Number(data?.senders?.[0]?.cost ?? data?.senders?.cost ?? 0)
+    const discounts = data?.receiver?.discounts ?? []
+    const bonificacion = Array.isArray(discounts)
+      ? discounts.reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
+      : 0
+
+    return { costoSeller, bonificacion }
+  } catch {
+    return { costoSeller: 0, bonificacion: 0 }
   }
+}
 
-  const feeDetails = mp?.fee_details ?? []
-  for (const f of feeDetails) {
-    if (f.fee_payer === 'collector') {
-      comision_ml += Number(f.amount ?? 0)
+function calcularComponentesPagos(payments: any[]) {
+  let comision = 0
+  let impuestos = 0
+
+  for (const mp of payments) {
+    if (!mp) continue
+    const charges = mp.charges_details ?? []
+    for (const c of charges) {
+      const amount = Number(c.amounts?.original ?? 0)
+      if (c.type === 'fee') comision += amount
+      else if (c.type === 'tax') impuestos += amount
+    }
+    const feeDetails = mp.fee_details ?? []
+    for (const f of feeDetails) {
+      if (f.fee_payer === 'collector') {
+        comision += Number(f.amount ?? 0)
+      }
     }
   }
 
-  const discounts = Number(mp?.coupon_amount ?? 0)
-  const net_received = Number(mp?.transaction_details?.net_received_amount ?? mp?.transaction_amount ?? 0)
-  const transaction_amount = Number(mp?.transaction_amount ?? 0)
-
-  return { transaction_amount, comision_ml, impuestos, envio, discounts, net_received }
+  return { comision, impuestos }
 }
 
 export async function GET(request: Request) {
@@ -111,24 +126,17 @@ export async function GET(request: Request) {
   const tokenRow = tokenData as TokenRow
   let token = tokenRow.access_token
 
-  // Buscar paid pendientes (net_received >= total_amount significa que aún no se procesó bien)
+  // Buscar órdenes paid donde net_received >= total_amount (no procesadas con la nueva lógica)
   const { data: ordersToFix } = await supabase
     .from('orders')
     .select('order_id, total_amount, status, net_received')
     .eq('status', 'paid')
-    .gte('net_received', 0)
     .order('date_created', { ascending: false })
-    .limit(chunkSize * 3)  // traemos más y filtramos en JS
+    .limit(chunkSize * 3)
 
   const orders = (ordersToFix ?? [])
     .filter(o => Number(o.net_received ?? 0) >= Number(o.total_amount ?? 0))
     .slice(0, chunkSize)
-
-  // Total pendientes
-  const { count: totalPending } = await supabase
-    .from('orders')
-    .select('order_id', { count: 'exact', head: true })
-    .eq('status', 'paid')
 
   if (orders.length === 0) {
     return NextResponse.json({
@@ -139,13 +147,13 @@ export async function GET(request: Request) {
     })
   }
 
-  console.log(`[backfill-mp] Procesando ${orders.length}...`)
+  console.log(`[backfill] Procesando ${orders.length}...`)
 
   const firstCheck = await fetch(`https://api.mercadolibre.com/orders/${orders[0].order_id}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
   if (firstCheck.status === 401) {
-    console.log('[backfill-mp] Token vencido, refrescando...')
+    console.log('[backfill] Token vencido, refrescando...')
     const nuevoToken = await refreshToken(supabase, tokenRow)
     if (!nuevoToken) {
       return NextResponse.json({ error: 'No se pudo refrescar el token' }, { status: 401 })
@@ -168,37 +176,38 @@ export async function GET(request: Request) {
         return null
       }
 
-      const payments = orderDetail.payments ?? []
-      let comision_ml = 0
-      let impuestos = 0
-      let envio = 0
-      let discounts = 0
-      let net_received = 0
-      let mpOk = false
+      const total = Number(o.total_amount ?? 0)
 
-      for (const p of payments) {
-        if (!p.id) continue
-        const mp = await fetchMPPayment(p.id, token)
-        if (!mp) continue
-        mpOk = true
-        const comp = calcularComponentes(mp)
-        comision_ml += comp.comision_ml
-        impuestos += comp.impuestos
-        envio += comp.envio
-        discounts += comp.discounts
-        net_received += comp.net_received
-      }
+      const paymentIds = (orderDetail.payments ?? []).map((p: any) => p.id).filter(Boolean)
+      const mpPayments = await Promise.all(
+        paymentIds.map((id: any) => fetchMPPayment(id, token))
+      )
+      const validMp = mpPayments.filter(Boolean)
 
-      if (!mpOk) {
+      if (validMp.length === 0) {
         fetchErrors++
         return null
       }
 
+      // Datos de envío
+      let costoSeller = 0
+      let bonificacion = 0
+      if (orderDetail.shipping?.id) {
+        const ship = await fetchShippingData(orderDetail.shipping.id, token)
+        costoSeller = ship.costoSeller
+        bonificacion = ship.bonificacion
+      }
+
+      const { comision, impuestos } = calcularComponentesPagos(validMp)
+
+      // Recibís = total - comisión - impuestos - costo_envío + bonificación
+      const net_received = total - comision - impuestos - costoSeller + bonificacion
+
       return {
         order_id: o.order_id,
-        marketplace_fee: comision_ml + impuestos,
-        shipping_cost: envio,
-        discounts,
+        marketplace_fee: comision + impuestos,
+        shipping_cost: costoSeller,
+        discounts: bonificacion,
         net_received,
       }
     }))
