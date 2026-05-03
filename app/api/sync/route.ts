@@ -33,7 +33,7 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
     return null
   }
   const nuevoExpiresAt = new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
-  const { error: updateError } = await supabase
+  await supabase
     .from('ml_tokens')
     .update({
       access_token: refreshData.access_token,
@@ -41,51 +41,64 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
       expires_at: nuevoExpiresAt
     })
     .eq('ml_user_id', tokenRow.ml_user_id)
-  if (updateError) {
-    console.log('Error guardando token nuevo:', JSON.stringify(updateError))
-    return null
-  }
   console.log('Token refrescado OK')
   return refreshData.access_token
 }
 
-function sumarMarketplaceFee(payments: any[] | undefined): number {
-  if (!Array.isArray(payments)) return 0
-  return payments.reduce((acc, p) => acc + Number(p.marketplace_fee ?? 0), 0)
-}
-
-function envioGratisParaComprador(order: any): boolean {
-  const tags: string[] = order.shipping?.tags ?? []
-  return tags.includes('mandatory_free_shipping') ||
-         tags.includes('free_shipping') ||
-         order.shipping?.cost_components?.shipping_method === 'free' ||
-         false
-}
-
-async function fetchShippingCost(shippingId: string | number, token: string): Promise<number> {
+async function fetchMPPayment(paymentId: number | string, token: string): Promise<any | null> {
   try {
-    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    if (res.status !== 200) return 0
-    const data = await res.json()
-    const senderCost = data?.senders?.[0]?.cost ?? data?.senders?.cost ?? 0
-    return Number(senderCost) || 0
-  } catch {
-    return 0
-  }
-}
-
-// Pide el detalle completo de UNA orden (incluyendo payments con marketplace_fee)
-async function fetchOrderDetail(orderId: number | string, token: string): Promise<any | null> {
-  try {
-    const res = await fetch(`https://api.mercadolibre.com/orders/${orderId}`, {
+    const res = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
       headers: { Authorization: `Bearer ${token}` }
     })
     if (res.status !== 200) return null
     return await res.json()
   } catch {
     return null
+  }
+}
+
+// Calcula los componentes financieros de un pago a partir de charges_details
+function calcularComponentes(mp: any) {
+  const charges = mp?.charges_details ?? []
+  let comision_ml = 0
+  let impuestos = 0
+  let envio = 0
+
+  for (const c of charges) {
+    const amount = Number(c.amounts?.original ?? 0)
+    const tipo = c.type
+    if (tipo === 'fee') {
+      comision_ml += amount
+    } else if (tipo === 'tax') {
+      impuestos += amount
+    } else if (tipo === 'shipping') {
+      envio += amount
+    }
+  }
+
+  // Sumar también fee_details con fee_payer = collector (por si acaso)
+  const feeDetails = mp?.fee_details ?? []
+  for (const f of feeDetails) {
+    if (f.fee_payer === 'collector') {
+      comision_ml += Number(f.amount ?? 0)
+    }
+  }
+
+  // Bonificaciones / descuentos a favor del vendedor
+  // (cuando hay un coupon_amount aportado por ML, beneficia al vendedor)
+  const discounts = Number(mp?.coupon_amount ?? 0)
+
+  // Net received: usamos el dato directo que MP calcula al peso
+  const net_received = Number(mp?.transaction_details?.net_received_amount ?? mp?.transaction_amount ?? 0)
+  const transaction_amount = Number(mp?.transaction_amount ?? 0)
+
+  return {
+    transaction_amount,
+    comision_ml,
+    impuestos,
+    envio,
+    discounts,
+    net_received,
   }
 }
 
@@ -120,6 +133,9 @@ export async function GET() {
   const lastSyncAt: string | null = syncStateData?.last_sync_at ?? null
   const inicioSync = new Date().toISOString()
 
+  const LIMIT = 50
+  const MAX_PAGES = 100
+
   const buildUrl = (offset: number): { url: string; modo: string } => {
     const params = new URLSearchParams({
       seller: sellerId,
@@ -143,8 +159,6 @@ export async function GET() {
     }
   }
 
-  const LIMIT = 50
-  const MAX_PAGES = 100
   let offset = 0
   let sincronizadas = 0
   let totalDisponible = 0
@@ -172,9 +186,7 @@ export async function GET() {
       }
       token = nuevoToken
       yaRefresque = true
-      ordersRes = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
+      ordersRes = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       ordersData = await ordersRes.json()
     }
 
@@ -192,44 +204,53 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // 🆕 Para cada orden, traer el DETALLE COMPLETO (con marketplace_fee real)
-    // y el costo de envío en paralelo.
-    const detailsPromises = results.map((order: any) => fetchOrderDetail(order.id, token))
-    const shippingPromises = results.map(async (order: any) => {
-      const shippingId = order.shipping?.id
-      const esFree = envioGratisParaComprador(order)
-      if (!shippingId || !esFree) return 0
-      return fetchShippingCost(shippingId, token)
-    })
+    // Para cada orden, consultar todos sus payments en MP en paralelo
+    const ordersConFinanzas = await Promise.all(results.map(async (order: any) => {
+      const payments = order.payments ?? []
+      let comision_ml = 0
+      let impuestos = 0
+      let envio = 0
+      let discounts = 0
+      let net_received = 0
+      let mpOk = false
 
-    const [detalles, shippingCosts] = await Promise.all([
-      Promise.all(detailsPromises),
-      Promise.all(shippingPromises),
-    ])
-
-    const ordersToInsert = results.map((order: any, idx: number) => {
-      const detalle = detalles[idx]
-      // Usamos los payments del detalle (más completo). Si falla la consulta, fallback a 0.
-      const marketplace_fee = sumarMarketplaceFee(detalle?.payments)
-      const shipping_cost = shippingCosts[idx] ?? 0
-      const total = Number(order.total_amount ?? 0)
-      const net_received = total - marketplace_fee - shipping_cost
+      for (const p of payments) {
+        if (!p.id) continue
+        const mp = await fetchMPPayment(p.id, token)
+        if (!mp) continue
+        mpOk = true
+        const comp = calcularComponentes(mp)
+        comision_ml += comp.comision_ml
+        impuestos += comp.impuestos
+        envio += comp.envio
+        discounts += comp.discounts
+        net_received += comp.net_received
+      }
 
       return {
-        order_id: order.id,
-        status: order.status,
-        total_amount: total,
-        currency: order.currency_id,
-        buyer_id: order.buyer.id,
-        buyer_nickname: order.buyer.nickname,
-        date_created: order.date_created,
-        date_closed: order.date_closed,
-        cancel_reason: order.cancel_detail?.description ?? null,
-        marketplace_fee,
-        shipping_cost,
-        net_received,
+        order,
+        marketplace_fee: comision_ml + impuestos,  // todo lo que se queda ML/AFIP
+        shipping_cost: envio,
+        discounts,
+        net_received: mpOk ? net_received : 0,
       }
-    })
+    }))
+
+    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, net_received }) => ({
+      order_id: order.id,
+      status: order.status,
+      total_amount: Number(order.total_amount ?? 0),
+      currency: order.currency_id,
+      buyer_id: order.buyer.id,
+      buyer_nickname: order.buyer.nickname,
+      date_created: order.date_created,
+      date_closed: order.date_closed,
+      cancel_reason: order.cancel_detail?.description ?? null,
+      marketplace_fee,
+      shipping_cost,
+      discounts,
+      net_received,
+    }))
 
     const itemsToInsert = results.flatMap((order: any) =>
       order.order_items.map((item: any) => ({

@@ -23,7 +23,6 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
   })
   const refreshData = await refreshRes.json()
   if (!refreshData.access_token) return null
-
   const nuevoExpiresAt = new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
   await supabase
     .from('ml_tokens')
@@ -60,32 +59,37 @@ async function fetchMPPayment(paymentId: number | string, token: string): Promis
   }
 }
 
-function envioGratisParaComprador(detalle: any): boolean {
-  const tags: string[] = detalle?.shipping?.tags ?? []
-  return tags.includes('mandatory_free_shipping') ||
-         tags.includes('free_shipping') ||
-         detalle?.shipping?.cost_components?.shipping_method === 'free' ||
-         false
-}
+function calcularComponentes(mp: any) {
+  const charges = mp?.charges_details ?? []
+  let comision_ml = 0
+  let impuestos = 0
+  let envio = 0
 
-async function fetchShippingCost(shippingId: string | number, token: string): Promise<number> {
-  try {
-    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    if (res.status !== 200) return 0
-    const data = await res.json()
-    const senderCost = data?.senders?.[0]?.cost ?? data?.senders?.cost ?? 0
-    return Number(senderCost) || 0
-  } catch {
-    return 0
+  for (const c of charges) {
+    const amount = Number(c.amounts?.original ?? 0)
+    const tipo = c.type
+    if (tipo === 'fee') comision_ml += amount
+    else if (tipo === 'tax') impuestos += amount
+    else if (tipo === 'shipping') envio += amount
   }
+
+  const feeDetails = mp?.fee_details ?? []
+  for (const f of feeDetails) {
+    if (f.fee_payer === 'collector') {
+      comision_ml += Number(f.amount ?? 0)
+    }
+  }
+
+  const discounts = Number(mp?.coupon_amount ?? 0)
+  const net_received = Number(mp?.transaction_details?.net_received_amount ?? mp?.transaction_amount ?? 0)
+  const transaction_amount = Number(mp?.transaction_amount ?? 0)
+
+  return { transaction_amount, comision_ml, impuestos, envio, discounts, net_received }
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const chunkSize = Math.min(200, Math.max(10, parseInt(searchParams.get('chunk') ?? '50', 10)))
-  const debug = searchParams.get('debug') === '1'
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -107,26 +111,23 @@ export async function GET(request: Request) {
   const tokenRow = tokenData as TokenRow
   let token = tokenRow.access_token
 
-  // Buscar órdenes pagadas que aún no tengan marketplace_fee cargado
-  const { data: ordersToFix, error: queryError } = await supabase
+  // Buscar paid pendientes (net_received >= total_amount significa que aún no se procesó bien)
+  const { data: ordersToFix } = await supabase
     .from('orders')
-    .select('order_id, total_amount, status')
-    .eq('marketplace_fee', 0)
+    .select('order_id, total_amount, status, net_received')
     .eq('status', 'paid')
+    .gte('net_received', 0)
     .order('date_created', { ascending: false })
-    .limit(chunkSize)
+    .limit(chunkSize * 3)  // traemos más y filtramos en JS
 
-  if (queryError) {
-    return NextResponse.json({ error: queryError.message }, { status: 500 })
-  }
+  const orders = (ordersToFix ?? [])
+    .filter(o => Number(o.net_received ?? 0) >= Number(o.total_amount ?? 0))
+    .slice(0, chunkSize)
 
-  const orders = ordersToFix ?? []
-
-  // Total pendientes (todas las paid sin fee)
+  // Total pendientes
   const { count: totalPending } = await supabase
     .from('orders')
     .select('order_id', { count: 'exact', head: true })
-    .eq('marketplace_fee', 0)
     .eq('status', 'paid')
 
   if (orders.length === 0) {
@@ -134,14 +135,12 @@ export async function GET(request: Request) {
       ok: true,
       mensaje: '✅ No hay más órdenes pendientes',
       processed: 0,
-      total_pending: 0,
       done: true,
     })
   }
 
-  console.log(`[backfill-mp] Procesando ${orders.length} de ${totalPending ?? '?'} pendientes...`)
+  console.log(`[backfill-mp] Procesando ${orders.length}...`)
 
-  // Refresh preventivo
   const firstCheck = await fetch(`https://api.mercadolibre.com/orders/${orders[0].order_id}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
@@ -158,7 +157,6 @@ export async function GET(request: Request) {
   let processed = 0
   let fetchErrors = 0
   let updateErrors = 0
-  const sampleDebug: any[] = []
 
   for (let i = 0; i < orders.length; i += SUB_BATCH) {
     const slice = orders.slice(i, i + SUB_BATCH)
@@ -171,57 +169,38 @@ export async function GET(request: Request) {
       }
 
       const payments = orderDetail.payments ?? []
-      let total_marketplace_fee = 0
-      let total_net_received = 0
-      let total_payments_amount = 0
+      let comision_ml = 0
+      let impuestos = 0
+      let envio = 0
+      let discounts = 0
+      let net_received = 0
+      let mpOk = false
 
       for (const p of payments) {
         if (!p.id) continue
         const mp = await fetchMPPayment(p.id, token)
         if (!mp) continue
-
-        const feesCollector = (mp.fee_details ?? [])
-          .filter((f: any) => f.fee_payer === 'collector')
-          .reduce((acc: number, f: any) => acc + Number(f.amount ?? 0), 0)
-
-        const taxesCollector = (mp.charges_details ?? [])
-          .filter((c: any) =>
-            c.metadata?.mov_detail === 'tax_withholding_collector' ||
-            (c.type === 'tax' && c.accounts?.from === 'collector')
-          )
-          .reduce((acc: number, c: any) => acc + Number(c.amounts?.original ?? 0), 0)
-
-        total_marketplace_fee += feesCollector + taxesCollector
-        total_net_received += Number(mp.transaction_details?.net_received_amount ?? mp.transaction_amount ?? 0)
-        total_payments_amount += Number(mp.transaction_amount ?? 0)
+        mpOk = true
+        const comp = calcularComponentes(mp)
+        comision_ml += comp.comision_ml
+        impuestos += comp.impuestos
+        envio += comp.envio
+        discounts += comp.discounts
+        net_received += comp.net_received
       }
 
-      let shipping_cost = 0
-      const shippingId = orderDetail.shipping?.id
-      if (shippingId && envioGratisParaComprador(orderDetail)) {
-        shipping_cost = await fetchShippingCost(shippingId, token)
+      if (!mpOk) {
+        fetchErrors++
+        return null
       }
 
-      const total = Number(o.total_amount ?? 0)
-      const net_received = total_net_received - shipping_cost
-
-      const update = {
+      return {
         order_id: o.order_id,
-        marketplace_fee: total_marketplace_fee,
-        shipping_cost,
+        marketplace_fee: comision_ml + impuestos,
+        shipping_cost: envio,
+        discounts,
         net_received,
       }
-
-      if (debug && sampleDebug.length < 3) {
-        sampleDebug.push({
-          ...update,
-          total,
-          total_payments_amount,
-          payments_count: payments.length,
-        })
-      }
-
-      return update
     }))
 
     const validUpdates = updates.filter((u): u is NonNullable<typeof u> => u !== null)
@@ -233,6 +212,7 @@ export async function GET(request: Request) {
           .update({
             marketplace_fee: u.marketplace_fee,
             shipping_cost: u.shipping_cost,
+            discounts: u.discounts,
             net_received: u.net_received,
           })
           .eq('order_id', u.order_id)
@@ -242,7 +222,6 @@ export async function GET(request: Request) {
 
     updateResults.forEach((r, idx) => {
       if (r.error || !r.data || r.data.length === 0) {
-        console.log(`[backfill-mp] Update error en ${validUpdates[idx].order_id}:`, r.error?.message)
         updateErrors++
       } else {
         processed++
@@ -250,19 +229,11 @@ export async function GET(request: Request) {
     })
   }
 
-  const remaining = Math.max(0, (totalPending ?? 0) - processed)
-
   return NextResponse.json({
     ok: true,
     processed,
     fetch_errors: fetchErrors,
     update_errors: updateErrors,
-    total_pending_at_start: totalPending ?? 0,
-    remaining,
-    done: remaining === 0,
-    debug_sample: debug ? sampleDebug : undefined,
-    mensaje: remaining === 0
-      ? `✅ Backfill completo. Procesadas: ${processed}`
-      : `Procesadas ${processed}. Quedan ${remaining}. Volvé a llamar.`
+    mensaje: `Procesadas ${processed}. Si quedan más, volvé a llamar.`
   })
 }

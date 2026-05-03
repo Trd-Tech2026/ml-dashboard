@@ -19,6 +19,7 @@ export type OrderWithItems = {
   date_created: string
   marketplace_fee: number
   shipping_cost: number
+  discounts: number
   net_received: number
   items: OrderItem[]
 }
@@ -177,6 +178,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   <span className="vt-fin-value">−{formatARS(o.shipping_cost)}</span>
                                 </div>
                               )}
+                              {o.discounts > 0 && (
+                                <div className="vt-financial-row vt-fin-bonus">
+                                  <span className="vt-fin-label">+ Descuentos y bonificaciones</span>
+                                  <span className="vt-fin-value">+{formatARS(o.discounts)}</span>
+                                </div>
+                              )}
                               <div className="vt-financial-row vt-fin-total">
                                 <span className="vt-fin-label">💰 Recibís</span>
                                 <span className="vt-fin-value">{formatARS(o.net_received)}</span>
@@ -254,6 +261,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                         <div className="vt-financial-row vt-fin-deduct">
                           <span className="vt-fin-label">— Envío</span>
                           <span className="vt-fin-value">−{formatARS(o.shipping_cost)}</span>
+                        </div>
+                      )}
+                      {o.discounts > 0 && (
+                        <div className="vt-financial-row vt-fin-bonus">
+                          <span className="vt-fin-label">+ Bonificaciones</span>
+                          <span className="vt-fin-value">+{formatARS(o.discounts)}</span>
                         </div>
                       )}
                       <div className="vt-financial-row vt-fin-total">
@@ -421,6 +434,9 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         }
         .vt-financial-row.vt-fin-deduct {
           color: #d32f2f;
+        }
+        .vt-financial-row.vt-fin-bonus {
+          color: #2e7d32;
         }
         .vt-financial-row.vt-fin-total {
           border-top: 2px solid #f0f0f0;

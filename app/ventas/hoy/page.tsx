@@ -25,7 +25,6 @@ export default async function Hoy() {
 
   const inicioDiaISO = inicioDiaArgentinaISO()
 
-  // Traer órdenes con sus items + datos financieros
   const { data: ordenesRaw } = await supabase
     .from('orders')
     .select(`
@@ -37,6 +36,7 @@ export default async function Hoy() {
       date_created,
       marketplace_fee,
       shipping_cost,
+      discounts,
       net_received,
       order_items (
         item_id,
@@ -57,6 +57,7 @@ export default async function Hoy() {
     date_created: o.date_created,
     marketplace_fee: Number(o.marketplace_fee ?? 0),
     shipping_cost: Number(o.shipping_cost ?? 0),
+    discounts: Number(o.discounts ?? 0),
     net_received: Number(o.net_received ?? 0),
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
