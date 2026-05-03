@@ -4,12 +4,18 @@ import { createClient } from '@supabase/supabase-js'
 export const maxDuration = 30
 
 export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const orderIdParam = searchParams.get('order')
+
+  if (!orderIdParam) {
+    return NextResponse.json({ error: 'Pasame ?order=ORDER_ID' }, { status: 400 })
+  }
+
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // Sacamos el access token
   const { data: tokenData } = await supabase
     .from('ml_tokens')
     .select('access_token')
@@ -24,56 +30,60 @@ export async function GET(request: Request) {
 
   const token = tokenData.access_token
 
-  // Tomamos un order_id pagado para probar
-  const { searchParams } = new URL(request.url)
-  let orderId = searchParams.get('order')
-
-  if (!orderId) {
-    const { data: order } = await supabase
-      .from('orders')
-      .select('order_id')
-      .eq('status', 'paid')
-      .limit(1)
-      .maybeSingle()
-    orderId = order?.order_id?.toString() ?? null
-  }
-
-  if (!orderId) {
-    return NextResponse.json({ error: 'No hay orden de prueba' }, { status: 404 })
-  }
-
-  // 1. Pedimos la orden a ML para sacar el payment_id
-  const orderRes = await fetch(`https://api.mercadolibre.com/orders/${orderId}`, {
+  // Traer ML order completa
+  const orderRes = await fetch(`https://api.mercadolibre.com/orders/${orderIdParam}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
   const orderData = await orderRes.json()
 
-  const paymentId = orderData?.payments?.[0]?.id
-
-  if (!paymentId) {
-    return NextResponse.json({
-      ok: false,
-      step: 'ml_order',
-      message: 'No se encontró payment_id en la orden',
-      order_response: orderData,
+  // Traer todos los payments en MP
+  const payments = orderData?.payments ?? []
+  const paymentsDetails = await Promise.all(
+    payments.map(async (p: any) => {
+      const r = await fetch(`https://api.mercadopago.com/v1/payments/${p.id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      return r.status === 200 ? await r.json() : { error: r.status }
     })
+  )
+
+  // Traer shipping si tiene
+  let shippingCost: any = null
+  if (orderData?.shipping?.id) {
+    const r = await fetch(`https://api.mercadolibre.com/shipments/${orderData.shipping.id}/costs`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    shippingCost = r.status === 200 ? await r.json() : { error: r.status }
   }
 
-  // 2. Probamos llamar a Mercado Pago con el MISMO token
-  const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
-    headers: { Authorization: `Bearer ${token}` }
-  })
-
-  const mpData = await mpRes.json().catch(() => null)
-
   return NextResponse.json({
-    order_id: orderId,
-    payment_id: paymentId,
-    ml_order_payment: orderData?.payments?.[0],
-    mp_status: mpRes.status,
-    mp_data: mpData,
-    // Si llegó OK, mostramos los campos relevantes
-    fee_real: mpData?.fee_details ?? null,
-    net_amount_real: mpData?.transaction_details?.net_received_amount ?? null,
+    order_id: orderIdParam,
+    ml_order: {
+      id: orderData?.id,
+      total_amount: orderData?.total_amount,
+      paid_amount: orderData?.paid_amount,
+      shipping_id: orderData?.shipping?.id,
+      shipping_tags: orderData?.shipping?.tags,
+      pack_id: orderData?.pack_id,
+      coupon: orderData?.coupon,
+      taxes: orderData?.taxes,
+    },
+    mp_payments: paymentsDetails.map((mp: any) => ({
+      id: mp?.id,
+      transaction_amount: mp?.transaction_amount,
+      taxes_amount: mp?.taxes_amount,
+      shipping_amount: mp?.shipping_amount,
+      coupon_amount: mp?.coupon_amount,
+      transaction_details: mp?.transaction_details,
+      fee_details: mp?.fee_details,
+      charges_details: mp?.charges_details?.map((c: any) => ({
+        type: c.type,
+        name: c.name,
+        amount: c.amounts?.original,
+        accounts: c.accounts,
+        metadata_detail: c.metadata?.mov_detail,
+      })),
+    })),
+    shipping_cost: shippingCost,
   })
 }
