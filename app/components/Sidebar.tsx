@@ -1,19 +1,18 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useState, useEffect } from 'react'
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const [open, setOpen] = useState(false)
 
-  // Cerrar el menú cuando cambia la ruta
   useEffect(() => {
     setOpen(false)
   }, [pathname])
 
-  // Bloquear scroll del body cuando el menú mobile está abierto
   useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden'
@@ -31,23 +30,30 @@ export default function Sidebar() {
   }
 
   const items: Item[] = [
-  { href: '/', label: 'Inicio', icon: '🏠' },
-  { href: '/ventas/hoy', label: 'Ventas', icon: '🛒' },
-  { href: '/stock', label: 'Stock', icon: '📦' },
-  { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰', soon: true },
-]
+    { href: '/', label: 'Inicio', icon: '🏠' },
+    { href: '/ventas/hoy', label: 'Ventas', icon: '🛒' },
+    { href: '/stock', label: 'Stock', icon: '📦' },
+    { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰', soon: true },
+  ]
 
-  // Una ruta está activa si coincide exacto, o si la actual empieza con esa ruta
-  // (ej: /ventas/hoy debería marcar "Ventas hoy" como activo).
-  // Excepción: la home "/" solo se marca si el pathname es exactamente "/".
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/'
     return pathname === href || pathname.startsWith(href + '/')
   }
 
+  // No mostrar el sidebar en /login
+  if (pathname === '/login') {
+    return null
+  }
+
+  const handleLogout = async () => {
+    await fetch('/api/session/logout', { method: 'POST' })
+    router.push('/login')
+    router.refresh()
+  }
+
   return (
     <>
-      {/* Botón hamburguesa (solo mobile) */}
       <button
         className="hamburger"
         onClick={() => setOpen(true)}
@@ -56,10 +62,8 @@ export default function Sidebar() {
         ☰
       </button>
 
-      {/* Overlay oscuro detrás del menú abierto */}
       {open && <div className="overlay" onClick={() => setOpen(false)} />}
 
-      {/* Sidebar (siempre visible en desktop, deslizable en mobile) */}
       <aside className={`sidebar ${open ? 'sidebar-open' : ''}`}>
         <div className="sidebar-header">
           <div>
@@ -90,6 +94,13 @@ export default function Sidebar() {
             )
           })}
         </nav>
+
+        <div className="sidebar-footer">
+          <button onClick={handleLogout} className="logout-btn">
+            <span>🔒</span>
+            <span>Cerrar sesión</span>
+          </button>
+        </div>
       </aside>
 
       <style>{`
@@ -118,6 +129,8 @@ export default function Sidebar() {
           min-height: 100vh;
           padding: 24px 0;
           flex-shrink: 0;
+          display: flex;
+          flex-direction: column;
         }
         .sidebar-header {
           padding: 0 24px 24px;
@@ -149,6 +162,7 @@ export default function Sidebar() {
         }
         .sidebar nav {
           margin-top: 16px;
+          flex: 1;
         }
         .sidebar-link {
           display: flex;
@@ -175,6 +189,28 @@ export default function Sidebar() {
           border-radius: 10px;
           font-weight: normal;
           letter-spacing: 0.5px;
+        }
+        .sidebar-footer {
+          padding: 16px 24px;
+          border-top: 1px solid #333;
+        }
+        .logout-btn {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          background: transparent;
+          color: #888;
+          border: 1px solid #333;
+          padding: 10px 14px;
+          border-radius: 8px;
+          font-size: 13px;
+          cursor: pointer;
+          width: 100%;
+          transition: all 0.15s ease;
+        }
+        .logout-btn:hover {
+          color: #f44336;
+          border-color: #f44336;
         }
 
         @media (max-width: 768px) {
