@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useRef, useEffect, KeyboardEvent, ChangeEvent, ClipboardEvent } from 'react'
+import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 function LoginForm() {
@@ -8,134 +8,161 @@ function LoginForm() {
   const searchParams = useSearchParams()
   const redirectTo = searchParams.get('redirect') ?? '/'
 
-  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
+  const [pin, setPin] = useState<string>('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const inputs = useRef<(HTMLInputElement | null)[]>([])
+  const [error, setError] = useState<boolean>(false)
 
-  useEffect(() => {
-    inputs.current[0]?.focus()
-  }, [])
-
-  const handleChange = (i: number, e: ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.replace(/\D/g, '')
-    if (val.length === 0) {
-      const next = [...digits]
-      next[i] = ''
-      setDigits(next)
-      return
-    }
-    if (val.length > 1) {
-      const chars = val.slice(0, 6).split('')
-      const next = [...digits]
-      for (let j = 0; j < chars.length && i + j < 6; j++) {
-        next[i + j] = chars[j]
-      }
-      setDigits(next)
-      const last = Math.min(i + chars.length, 5)
-      inputs.current[last]?.focus()
-      if (next.every(d => d !== '')) {
-        submit(next.join(''))
-      }
-      return
-    }
-
-    const next = [...digits]
-    next[i] = val[0]
-    setDigits(next)
-
-    if (i < 5) {
-      inputs.current[i + 1]?.focus()
-    } else {
-      if (next.every(d => d !== '')) {
-        submit(next.join(''))
-      }
-    }
-  }
-
-  const handleKeyDown = (i: number, e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace' && !digits[i] && i > 0) {
-      inputs.current[i - 1]?.focus()
-    } else if (e.key === 'ArrowLeft' && i > 0) {
-      inputs.current[i - 1]?.focus()
-    } else if (e.key === 'ArrowRight' && i < 5) {
-      inputs.current[i + 1]?.focus()
-    } else if (e.key === 'Enter') {
-      const pin = digits.join('')
-      if (pin.length === 6) submit(pin)
-    }
-  }
-
-  const handlePaste = (e: ClipboardEvent<HTMLInputElement>) => {
-    e.preventDefault()
-    const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
-    if (text.length === 0) return
-    const next = ['', '', '', '', '', '']
-    for (let j = 0; j < text.length; j++) next[j] = text[j]
-    setDigits(next)
-    const last = Math.min(text.length, 5)
-    inputs.current[last]?.focus()
-    if (next.every(d => d !== '')) {
-      submit(next.join(''))
-    }
-  }
-
-  const submit = async (pin: string) => {
+  const submit = useCallback(async (pinValue: string) => {
     setLoading(true)
-    setError(null)
+    setError(false)
     try {
       const res = await fetch('/api/session/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin }),
+        body: JSON.stringify({ pin: pinValue }),
       })
       const data = await res.json()
       if (!res.ok || !data.ok) {
-        setError(data.error ?? 'PIN incorrecto')
-        setDigits(['', '', '', '', '', ''])
-        inputs.current[0]?.focus()
-        setLoading(false)
+        setError(true)
+        setTimeout(() => {
+          setPin('')
+          setError(false)
+          setLoading(false)
+        }, 600)
         return
       }
       router.push(redirectTo)
       router.refresh()
-    } catch (err) {
-      setError('Error de conexión, intentá de nuevo')
-      setLoading(false)
+    } catch {
+      setError(true)
+      setTimeout(() => {
+        setPin('')
+        setError(false)
+        setLoading(false)
+      }, 600)
+    }
+  }, [router, redirectTo])
+
+  const addDigit = (d: string) => {
+    if (loading || error) return
+    if (pin.length >= 6) return
+    const next = pin + d
+    setPin(next)
+    if (next.length === 6) {
+      submit(next)
     }
   }
 
+  const removeDigit = () => {
+    if (loading || error) return
+    setPin(pin.slice(0, -1))
+  }
+
+  // Soporte teclado físico
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (loading || error) return
+      if (/^\d$/.test(e.key)) {
+        addDigit(e.key)
+      } else if (e.key === 'Backspace') {
+        removeDigit()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pin, loading, error])
+
+  const buttons = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+
   return (
-    <div className="login-card">
+    <div className="content">
+      {/* Logo SVG inspirado en TRDTECH */}
       <div className="logo">
-        <h1>ML Dashboard</h1>
-        <p>TRDTECH</p>
+        <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" className="logo-svg">
+          <defs>
+            <linearGradient id="trdGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#0d4d6e" />
+              <stop offset="50%" stopColor="#1ca0c4" />
+              <stop offset="100%" stopColor="#3ee5e0" />
+            </linearGradient>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+              <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          {/* Arco superior */}
+          <path
+            d="M 50 80 Q 100 30 150 80"
+            stroke="url(#trdGrad)"
+            strokeWidth="14"
+            fill="none"
+            strokeLinecap="round"
+            filter="url(#glow)"
+          />
+          {/* Arco inferior */}
+          <path
+            d="M 40 130 Q 100 180 160 120"
+            stroke="url(#trdGrad)"
+            strokeWidth="14"
+            fill="none"
+            strokeLinecap="round"
+            filter="url(#glow)"
+          />
+        </svg>
       </div>
 
-      <h2>Ingresá tu PIN</h2>
-      <p className="subtitle">6 dígitos para acceder al dashboard</p>
+      <h1 className="brand">TRDTECH</h1>
+      <p className="tagline">TODO PARA TU HOGAR</p>
 
-      <div className="pin-inputs">
-        {digits.map((d, i) => (
-          <input
+      <p className="instruction">Ingresá tu PIN</p>
+      <p className="hint">6 dígitos para acceder</p>
+
+      {/* Indicadores del PIN */}
+      <div className={`dots ${error ? 'dots-error' : ''}`}>
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div
             key={i}
-            ref={(el) => { inputs.current[i] = el }}
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={1}
-            value={d}
-            onChange={(e) => handleChange(i, e)}
-            onKeyDown={(e) => handleKeyDown(i, e)}
-            onPaste={handlePaste}
-            disabled={loading}
-            className={`pin-input ${error ? 'pin-error' : ''}`}
+            className={`dot ${i < pin.length ? 'dot-filled' : ''} ${error ? 'dot-error' : ''}`}
           />
         ))}
       </div>
 
-      {error && <div className="error-msg">⚠ {error}</div>}
-      {loading && <div className="loading-msg">Verificando...</div>}
+      {/* Teclado numérico */}
+      <div className="keypad">
+        {buttons.map((b) => (
+          <button
+            key={b}
+            type="button"
+            className="key"
+            onClick={() => addDigit(b)}
+            disabled={loading || error}
+          >
+            {b}
+          </button>
+        ))}
+        <div /> {/* placeholder vacío */}
+        <button
+          type="button"
+          className="key"
+          onClick={() => addDigit('0')}
+          disabled={loading || error}
+        >
+          0
+        </button>
+        <button
+          type="button"
+          className="key key-back"
+          onClick={removeDigit}
+          disabled={loading || error || pin.length === 0}
+          aria-label="Borrar"
+        >
+          ⌫
+        </button>
+      </div>
     </div>
   )
 }
@@ -143,103 +170,221 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <div className="login-page">
-      <Suspense fallback={<div className="login-card"><p>Cargando...</p></div>}>
+      {/* Partículas de fondo */}
+      <div className="particles">
+        {Array.from({ length: 30 }).map((_, i) => (
+          <div
+            key={i}
+            className="particle"
+            style={{
+              left: `${Math.random() * 100}%`,
+              top: `${Math.random() * 100}%`,
+              animationDelay: `${Math.random() * 8}s`,
+              animationDuration: `${4 + Math.random() * 6}s`,
+              opacity: 0.1 + Math.random() * 0.6,
+              transform: `scale(${0.3 + Math.random() * 1.2})`,
+            }}
+          />
+        ))}
+      </div>
+
+      <Suspense fallback={<div className="loading-fallback">Cargando...</div>}>
         <LoginForm />
       </Suspense>
 
       <style>{`
+        :global(body) {
+          margin: 0;
+        }
         .login-page {
-          min-height: 100vh;
-          background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+          position: fixed;
+          inset: 0;
+          background:
+            radial-gradient(ellipse at top, rgba(28, 160, 196, 0.15) 0%, transparent 50%),
+            radial-gradient(ellipse at bottom, rgba(13, 77, 110, 0.2) 0%, transparent 60%),
+            #050a14;
+          color: white;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          overflow: hidden;
           display: flex;
           align-items: center;
           justify-content: center;
+        }
+
+        .particles {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .particle {
+          position: absolute;
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: #3ee5e0;
+          box-shadow: 0 0 10px #3ee5e0, 0 0 20px rgba(62, 229, 224, 0.5);
+          animation: float infinite ease-in-out;
+        }
+        @keyframes float {
+          0%, 100% {
+            transform: translate(0, 0) scale(1);
+            opacity: 0.4;
+          }
+          50% {
+            transform: translate(20px, -30px) scale(1.3);
+            opacity: 0.8;
+          }
+        }
+
+        .content {
+          position: relative;
+          z-index: 10;
+          text-align: center;
           padding: 24px;
-        }
-        .login-card {
-          background: white;
-          border-radius: 16px;
-          padding: 40px 32px;
+          max-width: 380px;
           width: 100%;
-          max-width: 420px;
-          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-          text-align: center;
         }
-        .logo h1 {
-          margin: 0 0 4px;
-          font-size: 22px;
-          color: #1a1a1a;
-        }
-        .logo p {
-          margin: 0 0 32px;
-          font-size: 12px;
-          color: #888;
-          letter-spacing: 1px;
-        }
-        h2 {
-          margin: 0 0 6px;
-          font-size: 20px;
-          color: #1a1a1a;
-        }
-        .subtitle {
-          margin: 0 0 28px;
-          font-size: 14px;
-          color: #666;
-        }
-        .pin-inputs {
+
+        .logo {
+          margin-bottom: 12px;
           display: flex;
-          gap: 8px;
           justify-content: center;
-          margin-bottom: 16px;
         }
-        .pin-input {
-          width: 48px;
-          height: 56px;
-          font-size: 24px;
+        .logo-svg {
+          width: 110px;
+          height: 110px;
+          animation: pulse 3s ease-in-out infinite;
+        }
+        @keyframes pulse {
+          0%, 100% { filter: drop-shadow(0 0 10px rgba(62, 229, 224, 0.5)); }
+          50% { filter: drop-shadow(0 0 25px rgba(62, 229, 224, 0.9)); }
+        }
+
+        .brand {
+          font-size: 28px;
+          font-weight: 800;
+          letter-spacing: 4px;
+          margin: 0 0 4px;
+          background: linear-gradient(135deg, #ffffff 0%, #3ee5e0 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
+        .tagline {
+          font-size: 10px;
+          letter-spacing: 3px;
+          color: #5e8a9e;
+          margin: 0 0 36px;
           font-weight: 600;
-          text-align: center;
-          border: 2px solid #e5e5e5;
-          border-radius: 10px;
-          background: #fafafa;
-          color: #1a1a1a;
-          outline: none;
-          transition: all 0.15s ease;
         }
-        .pin-input:focus {
-          border-color: #2196F3;
-          background: white;
-          box-shadow: 0 0 0 3px rgba(33,150,243,0.15);
+
+        .instruction {
+          font-size: 18px;
+          font-weight: 600;
+          color: white;
+          margin: 0 0 4px;
         }
-        .pin-input.pin-error {
-          border-color: #f44336;
-          background: #fff5f5;
+        .hint {
+          font-size: 12px;
+          color: #6b8a99;
+          margin: 0 0 24px;
+        }
+
+        .dots {
+          display: flex;
+          gap: 12px;
+          justify-content: center;
+          margin-bottom: 32px;
+        }
+        .dot {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: transparent;
+          border: 2px solid #2a4a5a;
+          transition: all 0.18s ease;
+        }
+        .dot-filled {
+          background: #3ee5e0;
+          border-color: #3ee5e0;
+          box-shadow: 0 0 12px rgba(62, 229, 224, 0.7);
+        }
+        .dots-error {
           animation: shake 0.4s ease;
+        }
+        .dot-error {
+          background: #ff4757 !important;
+          border-color: #ff4757 !important;
+          box-shadow: 0 0 12px rgba(255, 71, 87, 0.7) !important;
         }
         @keyframes shake {
           0%, 100% { transform: translateX(0); }
-          25% { transform: translateX(-5px); }
-          75% { transform: translateX(5px); }
+          25% { transform: translateX(-8px); }
+          75% { transform: translateX(8px); }
         }
-        .error-msg {
-          color: #d32f2f;
-          font-size: 14px;
-          margin-top: 8px;
+
+        .keypad {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 12px;
+          max-width: 280px;
+          margin: 0 auto;
+        }
+        .key {
+          background: rgba(28, 160, 196, 0.08);
+          border: 1px solid rgba(62, 229, 224, 0.15);
+          border-radius: 14px;
+          color: white;
+          font-size: 24px;
           font-weight: 500;
+          height: 64px;
+          cursor: pointer;
+          transition: all 0.12s ease;
+          font-family: inherit;
+          backdrop-filter: blur(10px);
         }
-        .loading-msg {
-          color: #2196F3;
-          font-size: 14px;
-          margin-top: 8px;
+        .key:hover:not(:disabled) {
+          background: rgba(62, 229, 224, 0.18);
+          border-color: rgba(62, 229, 224, 0.5);
+          transform: translateY(-1px);
+        }
+        .key:active:not(:disabled) {
+          transform: translateY(0) scale(0.95);
+          background: rgba(62, 229, 224, 0.3);
+        }
+        .key:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+        .key-back {
+          color: #6b8a99;
+          font-size: 20px;
+        }
+
+        .loading-fallback {
+          color: #6b8a99;
         }
 
         @media (max-width: 480px) {
-          .pin-input {
-            width: 42px;
-            height: 50px;
-            font-size: 20px;
+          .logo-svg {
+            width: 90px;
+            height: 90px;
           }
-          .login-card {
-            padding: 32px 20px;
+          .brand {
+            font-size: 24px;
+          }
+          .keypad {
+            max-width: 240px;
+            gap: 10px;
+          }
+          .key {
+            height: 56px;
+            font-size: 22px;
+          }
+          .dot {
+            width: 12px;
+            height: 12px;
           }
         }
       `}</style>
