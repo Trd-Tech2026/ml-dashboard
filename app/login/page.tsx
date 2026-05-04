@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent, ClipboardEvent } from 'react'
+import { Suspense, useState, useRef, useEffect, KeyboardEvent, ChangeEvent, ClipboardEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirectTo = searchParams.get('redirect') ?? '/'
@@ -13,20 +13,18 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const inputs = useRef<(HTMLInputElement | null)[]>([])
 
-  // Auto-focus en el primer input al cargar
   useEffect(() => {
     inputs.current[0]?.focus()
   }, [])
 
   const handleChange = (i: number, e: ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.replace(/\D/g, '')  // solo números
+    const val = e.target.value.replace(/\D/g, '')
     if (val.length === 0) {
       const next = [...digits]
       next[i] = ''
       setDigits(next)
       return
     }
-    // Si pegaron varios caracteres en un solo input, distribuirlos
     if (val.length > 1) {
       const chars = val.slice(0, 6).split('')
       const next = [...digits]
@@ -36,7 +34,6 @@ export default function LoginPage() {
       setDigits(next)
       const last = Math.min(i + chars.length, 5)
       inputs.current[last]?.focus()
-      // Si se completó, intentar enviar
       if (next.every(d => d !== '')) {
         submit(next.join(''))
       }
@@ -47,11 +44,9 @@ export default function LoginPage() {
     next[i] = val[0]
     setDigits(next)
 
-    // Saltar al siguiente input
     if (i < 5) {
       inputs.current[i + 1]?.focus()
     } else {
-      // Si completó el último, intentar enviar
       if (next.every(d => d !== '')) {
         submit(next.join(''))
       }
@@ -89,7 +84,7 @@ export default function LoginPage() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch('/api/session/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin }),
@@ -102,7 +97,6 @@ export default function LoginPage() {
         setLoading(false)
         return
       }
-      // OK: redirigir
       router.push(redirectTo)
       router.refresh()
     } catch (err) {
@@ -112,38 +106,46 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <div className="logo">
-          <h1>ML Dashboard</h1>
-          <p>TRDTECH</p>
-        </div>
-
-        <h2>Ingresá tu PIN</h2>
-        <p className="subtitle">6 dígitos para acceder al dashboard</p>
-
-        <div className="pin-inputs">
-          {digits.map((d, i) => (
-            <input
-              key={i}
-              ref={(el) => { inputs.current[i] = el }}
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={1}
-              value={d}
-              onChange={(e) => handleChange(i, e)}
-              onKeyDown={(e) => handleKeyDown(i, e)}
-              onPaste={handlePaste}
-              disabled={loading}
-              className={`pin-input ${error ? 'pin-error' : ''}`}
-            />
-          ))}
-        </div>
-
-        {error && <div className="error-msg">⚠ {error}</div>}
-        {loading && <div className="loading-msg">Verificando...</div>}
+    <div className="login-card">
+      <div className="logo">
+        <h1>ML Dashboard</h1>
+        <p>TRDTECH</p>
       </div>
+
+      <h2>Ingresá tu PIN</h2>
+      <p className="subtitle">6 dígitos para acceder al dashboard</p>
+
+      <div className="pin-inputs">
+        {digits.map((d, i) => (
+          <input
+            key={i}
+            ref={(el) => { inputs.current[i] = el }}
+            type="text"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={1}
+            value={d}
+            onChange={(e) => handleChange(i, e)}
+            onKeyDown={(e) => handleKeyDown(i, e)}
+            onPaste={handlePaste}
+            disabled={loading}
+            className={`pin-input ${error ? 'pin-error' : ''}`}
+          />
+        ))}
+      </div>
+
+      {error && <div className="error-msg">⚠ {error}</div>}
+      {loading && <div className="loading-msg">Verificando...</div>}
+    </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <div className="login-page">
+      <Suspense fallback={<div className="login-card"><p>Cargando...</p></div>}>
+        <LoginForm />
+      </Suspense>
 
       <style>{`
         .login-page {
