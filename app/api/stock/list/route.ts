@@ -160,7 +160,7 @@ export async function GET(request: Request) {
     const existing = map.get(key)
     if (existing) {
       existing.items.push(item)
-      existing.totalStock += item.available_quantity
+      existing.totalStock = Math.min(existing.totalStock, item.available_quantity)
       existing.totalSold += item.sold_quantity
       existing.minPrice = Math.min(existing.minPrice, item.price)
       existing.maxPrice = Math.max(existing.maxPrice, item.price)
