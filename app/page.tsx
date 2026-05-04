@@ -1,206 +1,225 @@
 import Link from 'next/link'
 
-type ModuleCard = {
-  href: string
-  title: string
-  description: string
-  icon: string
-  color: string
-  soon?: boolean
-}
+export default function Hub() {
+  const cards = [
+    {
+      href: '/ventas/hoy',
+      icon: '🛒',
+      title: 'Ventas',
+      description: 'Hoy y períodos pasados',
+      accent: 'var(--accent)',
+      available: true,
+    },
+    {
+      href: '/stock',
+      icon: '📦',
+      title: 'Stock',
+      description: 'Publicaciones, stock y archivado',
+      accent: 'var(--info)',
+      available: true,
+    },
+    {
+      href: '/rentabilidad',
+      icon: '💰',
+      title: 'Rentabilidad',
+      description: 'Ganancia real por venta y producto',
+      accent: 'var(--warning)',
+      available: false,
+    },
+  ]
 
-const modules: ModuleCard[] = [
-  {
-    href: '/ventas/hoy',
-    title: 'Ventas',
-    description: 'Ventas del día y análisis histórico. KPIs, detalle de cada venta y filtros por período.',
-    icon: '🛒',
-    color: '#4CAF50',
-  },
-  {
-  href: '/stock',
-  title: 'Stock',
-  description: 'Inventario en tiempo real de tus publicaciones de Mercado Libre. Alertas de stock bajo.',
-  icon: '📦',
-  color: '#2196F3',
-},
-  {
-    href: '/rentabilidad',
-    title: 'Rentabilidad',
-    description: 'Ganancia neta por venta y por producto. Costos, comisiones de ML y márgenes.',
-    icon: '💰',
-    color: '#FF9800',
-    soon: true,
-  },
-]
-
-export default function Home() {
   return (
     <div className="hub">
       <div className="hub-header">
-        <h1>ML Dashboard</h1>
-        <p>TRDTECH — Elegí qué querés gestionar</p>
+        <div className="brand-row">
+          <div className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor="#0d4d6e" />
+                  <stop offset="50%" stopColor="#1ca0c4" />
+                  <stop offset="100%" stopColor="#3ee5e0" />
+                </linearGradient>
+              </defs>
+              <path d="M 20 40 Q 50 12 80 40" stroke="url(#brandGrad)" strokeWidth="8" fill="none" strokeLinecap="round" />
+              <path d="M 18 65 Q 50 92 82 60" stroke="url(#brandGrad)" strokeWidth="8" fill="none" strokeLinecap="round" />
+            </svg>
+          </div>
+          <div>
+            <h1>ML Dashboard</h1>
+            <p className="subtitle">TRDTECH · Todo para tu hogar</p>
+          </div>
+        </div>
       </div>
 
-      <div className="cards">
-        {modules.map((mod) => (
-          <Link key={mod.href} href={mod.href} className="card">
-            <div className="card-icon" style={{ backgroundColor: mod.color + '20', color: mod.color }}>
-              {mod.icon}
-            </div>
-            <div className="card-body">
-              <div className="card-title-row">
-                <h2>{mod.title}</h2>
-                {mod.soon && <span className="badge">Próximamente</span>}
-              </div>
-              <p>{mod.description}</p>
-            </div>
-            <div className="card-arrow">→</div>
-          </Link>
-        ))}
+      <div className="cards-grid">
+        {cards.map((c) => {
+          const Comp = c.available ? Link : 'div'
+          const props: any = c.available ? { href: c.href } : {}
+          return (
+            <Comp
+              key={c.title}
+              {...props}
+              className={`card ${!c.available ? 'card-disabled' : ''}`}
+              style={{ '--card-accent': c.accent } as React.CSSProperties}
+            >
+              <div className="card-icon">{c.icon}</div>
+              <h2 className="card-title">{c.title}</h2>
+              <p className="card-desc">{c.description}</p>
+              {!c.available && <span className="badge-soon">Pronto</span>}
+              {c.available && <span className="card-arrow">→</span>}
+            </Comp>
+          )
+        })}
       </div>
 
       <style>{`
         .hub {
-          padding: 48px 32px;
+          padding: 56px 40px 40px;
           max-width: 1100px;
           margin: 0 auto;
         }
         .hub-header {
-          margin-bottom: 32px;
+          margin-bottom: 48px;
         }
-        .hub-header h1 {
-          margin: 0 0 8px;
-          font-size: 32px;
-          color: #1a1a1a;
-        }
-        .hub-header p {
-          margin: 0;
-          color: #666;
-          font-size: 16px;
-        }
-        .cards {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 16px;
-        }
-        .card {
+        .brand-row {
           display: flex;
           align-items: center;
-          gap: 20px;
-          padding: 24px;
-          background: white;
-          border: 1px solid #e5e5e5;
-          border-radius: 12px;
-          text-decoration: none;
-          color: inherit;
-          transition: all 0.15s ease;
+          gap: 18px;
         }
-        .card:hover {
-          border-color: #c5c5c5;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-          transform: translateY(-1px);
-        }
-        .card-icon {
+        .brand-mark {
           width: 56px;
           height: 56px;
-          border-radius: 12px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 28px;
           flex-shrink: 0;
+          filter: drop-shadow(0 0 12px rgba(62, 229, 224, 0.4));
         }
-        .card-body {
-          flex: 1;
-          min-width: 0;
+        .brand-mark svg {
+          width: 100%;
+          height: 100%;
         }
-        .card-title-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 6px;
+        h1 {
+          margin: 0 0 4px;
+          font-size: 28px;
+          font-weight: 700;
+          color: var(--text-primary);
+          letter-spacing: -0.5px;
         }
-        .card-body h2 {
+        .subtitle {
           margin: 0;
+          font-size: 13px;
+          color: var(--text-muted);
+          letter-spacing: 1px;
+          text-transform: uppercase;
+        }
+
+        .cards-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 20px;
+        }
+        .card {
+          position: relative;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
+          border-radius: 16px;
+          padding: 28px 24px;
+          color: var(--text-primary);
+          transition: all 0.18s ease;
+          overflow: hidden;
+          display: block;
+        }
+        .card::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 3px;
+          background: var(--card-accent);
+          opacity: 0.5;
+          transition: opacity 0.18s ease;
+        }
+        .card:not(.card-disabled):hover {
+          background: var(--bg-card-hover);
+          border-color: var(--border-medium);
+          transform: translateY(-2px);
+          box-shadow: var(--shadow-card), 0 0 30px rgba(62, 229, 224, 0.08);
+        }
+        .card:not(.card-disabled):hover::before {
+          opacity: 1;
+        }
+        .card:not(.card-disabled):hover .card-arrow {
+          transform: translateX(4px);
+          opacity: 1;
+        }
+        .card-disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .card-icon {
+          font-size: 36px;
+          margin-bottom: 12px;
+          line-height: 1;
+        }
+        .card-title {
+          margin: 0 0 6px;
           font-size: 20px;
-          color: #1a1a1a;
-        }
-        .badge {
-          font-size: 11px;
-          background: #fff3e0;
-          color: #e65100;
-          padding: 3px 10px;
-          border-radius: 12px;
           font-weight: 600;
-          letter-spacing: 0.3px;
+          color: var(--text-primary);
         }
-        .card-body p {
+        .card-desc {
           margin: 0;
-          color: #666;
-          font-size: 14px;
+          font-size: 13px;
+          color: var(--text-muted);
           line-height: 1.5;
         }
+        .badge-soon {
+          position: absolute;
+          top: 16px;
+          right: 16px;
+          font-size: 10px;
+          background: var(--bg-elevated);
+          color: var(--text-muted);
+          padding: 4px 10px;
+          border-radius: 10px;
+          letter-spacing: 1px;
+          font-weight: 600;
+          border: 1px solid var(--border-subtle);
+        }
         .card-arrow {
-          color: #999;
-          font-size: 22px;
-          flex-shrink: 0;
-        }
-        .card:hover .card-arrow {
-          color: #1a1a1a;
-          transform: translateX(2px);
-        }
-
-        @media (min-width: 768px) {
-          .cards {
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-          }
+          position: absolute;
+          right: 24px;
+          bottom: 24px;
+          font-size: 20px;
+          color: var(--accent);
+          opacity: 0;
+          transition: all 0.18s ease;
         }
 
-        /* 📱 Mobile: cards más compactas */
         @media (max-width: 768px) {
-  .hub {
-    padding: 56px 16px 32px;
-  }
+          .hub {
+            padding: 24px 16px 32px;
+          }
           .hub-header {
-            margin-bottom: 20px;
+            margin-bottom: 28px;
           }
-          .hub-header h1 {
-            font-size: 24px;
-          }
-          .hub-header p {
-            font-size: 14px;
-          }
-          .cards {
-            gap: 12px;
-          }
-          .card {
-            padding: 16px;
-            gap: 14px;
-            border-radius: 10px;
-          }
-          .card-icon {
+          .brand-mark {
             width: 44px;
             height: 44px;
+          }
+          h1 {
             font-size: 22px;
-            border-radius: 10px;
           }
-          .card-body h2 {
-            font-size: 17px;
+          .subtitle {
+            font-size: 11px;
           }
-          .card-title-row {
-            margin-bottom: 4px;
-            gap: 8px;
+          .card {
+            padding: 22px 18px;
           }
-          .card-body p {
-            font-size: 13px;
-            line-height: 1.4;
+          .card-icon {
+            font-size: 30px;
           }
-          .badge {
-            font-size: 10px;
-            padding: 2px 8px;
-          }
-          .card-arrow {
+          .card-title {
             font-size: 18px;
           }
         }
