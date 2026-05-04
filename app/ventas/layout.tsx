@@ -3,97 +3,77 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-export default function VentasLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function VentasLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-
   const tabs = [
     { href: '/ventas/hoy', label: 'Hoy', icon: '🟢' },
     { href: '/ventas/historicas', label: 'Históricas', icon: '📊' },
   ]
+  const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/')
 
   return (
-    <div className="ventas-wrapper">
-      <div className="tabs">
-        {tabs.map((tab) => {
-          const activo = pathname === tab.href
+    <>
+      <div className="ventas-tabs">
+        {tabs.map((t) => {
+          const activo = isActive(t.href)
           return (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              className={`tab ${activo ? 'tab-activa' : ''}`}
-              prefetch
-            >
-              <span className="tab-icon">{tab.icon}</span>
-              <span>{tab.label}</span>
+            <Link key={t.href} href={t.href} className={`ventas-tab ${activo ? 'activa' : ''}`}>
+              <span className="tab-icon">{t.icon}</span>
+              <span>{t.label}</span>
             </Link>
           )
         })}
       </div>
-
-      <div className="ventas-content">
-        {children}
-      </div>
+      {children}
 
       <style>{`
-        .ventas-wrapper {
-          width: 100%;
-        }
-        .tabs {
+        .ventas-tabs {
           display: flex;
           gap: 4px;
-          padding: 16px 32px 0;
-          background: #f5f5f5;
-          border-bottom: 1px solid #e5e5e5;
+          padding: 16px 40px 0;
+          border-bottom: 1px solid var(--border-subtle);
+          background: rgba(13, 22, 32, 0.4);
+          backdrop-filter: blur(8px);
           position: sticky;
           top: 0;
-          z-index: 10;
+          z-index: 20;
         }
-        .tab {
+        .ventas-tab {
           display: flex;
           align-items: center;
           gap: 8px;
-          padding: 12px 20px;
-          color: #666;
+          padding: 12px 18px;
+          color: var(--text-muted);
+          background: transparent;
+          border-bottom: 2px solid transparent;
           text-decoration: none;
-          font-size: 15px;
+          font-size: 14px;
           font-weight: 500;
-          border-bottom: 3px solid transparent;
-          margin-bottom: -1px;
           transition: all 0.15s ease;
-          white-space: nowrap;
+          margin-bottom: -1px;
         }
-        .tab:hover {
-          color: #1a1a1a;
+        .ventas-tab:hover {
+          color: var(--text-secondary);
         }
-        .tab-activa {
-          color: #1a1a1a;
-          border-bottom-color: #4CAF50;
+        .ventas-tab.activa {
+          color: var(--accent);
+          border-bottom-color: var(--accent);
           font-weight: 600;
         }
         .tab-icon {
-          font-size: 14px;
-        }
-        .ventas-content {
-          width: 100%;
+          font-size: 12px;
         }
 
         @media (max-width: 768px) {
-          .tabs {
-            padding: 12px 16px 0;
-            padding-left: 68px; /* deja espacio para el botón hamburguesa */
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
+          .ventas-tabs {
+            padding: 16px 16px 0;
           }
-          .tab {
-            padding: 10px 16px;
-            font-size: 14px;
+          .ventas-tab {
+            padding: 10px 14px;
+            font-size: 13px;
           }
         }
       `}</style>
-    </div>
+    </>
   )
 }
