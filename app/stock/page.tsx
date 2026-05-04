@@ -69,8 +69,8 @@ function logisticLabel(type: string | null): string {
     case 'self_service': return 'Flex'
     case 'fulfillment': return 'Full'
     case 'cross_docking': return 'Colecta'
-    case 'drop_off': return 'A domicilio (vendedor)'
-    case 'default': return 'Sin Mercado Envíos'
+    case 'drop_off': return 'A domicilio'
+    case 'default': return 'Sin ME'
     case null:
     case undefined: return 'Sin envío'
     default: return type
@@ -84,15 +84,6 @@ function statusLabel(status: string): string {
     case 'closed': return 'Finalizada'
     case 'under_review': return 'En revisión'
     default: return status
-  }
-}
-
-function statusColor(status: string): string {
-  switch (status) {
-    case 'active': return '#4CAF50'
-    case 'paused': return '#FF9800'
-    case 'closed': return '#999'
-    default: return '#666'
   }
 }
 
@@ -120,10 +111,8 @@ export default function StockPage() {
   const [page, setPage] = useState(1)
   const pageSize = 50
 
-  // Selección de items (Set para performance)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  // Cargar items
   const fetchItems = useCallback(async () => {
     setLoading(true)
     const params = new URLSearchParams({
@@ -147,27 +136,15 @@ export default function StockPage() {
     }
   }, [search, status, logistic, stockFilter, sort, showArchived, page])
 
-  useEffect(() => {
-    fetchItems()
-  }, [fetchItems])
+  useEffect(() => { fetchItems() }, [fetchItems])
+  useEffect(() => { setPage(1) }, [search, status, logistic, stockFilter, sort, showArchived])
+  useEffect(() => { setSelected(new Set()) }, [showArchived])
 
-  // Volver a página 1 cuando cambia un filtro
-  useEffect(() => {
-    setPage(1)
-  }, [search, status, logistic, stockFilter, sort, showArchived])
-
-  // Limpiar selección al cambiar entre vistas (archivadas / no archivadas)
-  useEffect(() => {
-    setSelected(new Set())
-  }, [showArchived])
-
-  // ===== Búsqueda =====
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setSearch(searchInput.trim())
   }
 
-  // ===== Refresh stock (sync) =====
   const handleRefresh = async () => {
     setRefrescando(true)
     try {
@@ -182,7 +159,6 @@ export default function StockPage() {
     }
   }
 
-  // ===== Selección =====
   const toggleSelect = (itemId: string) => {
     setSelected(prev => {
       const next = new Set(prev)
@@ -198,10 +174,8 @@ export default function StockPage() {
     setSelected(prev => {
       const next = new Set(prev)
       if (todosSeleccionados) {
-        // Deseleccionar los de esta página
         pageIds.forEach(id => next.delete(id))
       } else {
-        // Seleccionar los de esta página
         pageIds.forEach(id => next.add(id))
       }
       return next
@@ -210,10 +184,8 @@ export default function StockPage() {
 
   const clearSelection = () => setSelected(new Set())
 
-  // ===== Archivar / Desarchivar =====
   const handleArchive = async (archive: boolean) => {
     if (selected.size === 0) return
-
     const action = archive ? 'archivar' : 'desarchivar'
     const confirmed = window.confirm(
       `¿${action.charAt(0).toUpperCase() + action.slice(1)} ${selected.size} publicación${selected.size === 1 ? '' : 'es'}?`
@@ -235,7 +207,6 @@ export default function StockPage() {
         alert(`Error: ${json.error ?? 'desconocido'}`)
         return
       }
-      console.log(`${action}: ${json.affected} items afectados`)
       setSelected(new Set())
       await fetchItems()
     } catch (err) {
@@ -266,31 +237,32 @@ export default function StockPage() {
           </p>
         </div>
         <button className="btn-refresh" onClick={handleRefresh} disabled={refrescando}>
-          {refrescando ? '⏳ Sincronizando...' : '🔄 Actualizar stock'}
+          <span>{refrescando ? '⏳' : '⟳'}</span>
+          <span>{refrescando ? 'Sincronizando...' : 'Actualizar stock'}</span>
         </button>
       </div>
 
       {/* KPIs */}
       <div className="kpis">
-        <div className="kpi kpi-blue">
+        <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
           <div className="kpi-label">Publicaciones</div>
           <div className="kpi-value">{kpis.total.toLocaleString('es-AR')}</div>
         </div>
-        <div className="kpi kpi-green">
+        <div className="kpi" style={{ '--kpi-c': 'var(--success)' } as any}>
           <div className="kpi-label">Stock total</div>
           <div className="kpi-value">{kpis.stock_total.toLocaleString('es-AR')}</div>
         </div>
-        <div className="kpi kpi-yellow">
+        <div className="kpi" style={{ '--kpi-c': 'var(--warning)' } as any}>
           <div className="kpi-label">Stock crítico (&lt;5)</div>
           <div className="kpi-value">{kpis.critico.toLocaleString('es-AR')}</div>
         </div>
-        <div className="kpi kpi-red">
+        <div className="kpi" style={{ '--kpi-c': 'var(--danger)' } as any}>
           <div className="kpi-label">Sin stock</div>
           <div className="kpi-value">{kpis.sin_stock.toLocaleString('es-AR')}</div>
         </div>
       </div>
 
-      {/* Toggle "Mostrar archivadas" */}
+      {/* Toggle archivadas */}
       <div className="archived-toggle">
         <label className="toggle-label">
           <input
@@ -302,7 +274,7 @@ export default function StockPage() {
         </label>
       </div>
 
-      {/* BARRA DE ACCIÓN — solo si hay selección */}
+      {/* BARRA DE ACCIÓN */}
       {selected.size > 0 && (
         <div className="action-bar">
           <span className="action-text">
@@ -315,7 +287,7 @@ export default function StockPage() {
                 ? '↩️ Desarchivar seleccionadas'
                 : '🗄️ Archivar seleccionadas'}
           </button>
-          <button className="btn-clear-sel" onClick={clearSelection}>Limpiar selección</button>
+          <button className="btn-clear-sel" onClick={clearSelection}>Limpiar</button>
         </div>
       )}
 
@@ -433,13 +405,15 @@ export default function StockPage() {
                     {item.seller_sku && <div className="sku">SKU: {item.seller_sku}</div>}
                   </td>
                   <td className="td-stock"><strong>{item.available_quantity}</strong></td>
-                  <td>{item.sold_quantity}</td>
-                  <td>{formatearPrecio(item.price, item.currency)}</td>
+                  <td className="td-num">{item.sold_quantity}</td>
+                  <td className="td-num">{formatearPrecio(item.price, item.currency)}</td>
                   <td>
-                    <span className="logistic-badge">
-                      {logisticLabel(item.logistic_type)}
-                      {item.free_shipping && ' 🆓'}
-                    </span>
+                    <div className="logistic-badges">
+                      <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>
+                        {logisticLabel(item.logistic_type)}
+                      </span>
+                      {item.free_shipping && <span className="logistic-badge logistic-free">🆓</span>}
+                    </div>
                   </td>
                   <td>
                     <div className="logistic-badges">
@@ -448,9 +422,6 @@ export default function StockPage() {
                       </span>
                       {item.is_flex && item.logistic_type !== 'self_service' && (
                         <span className="logistic-badge logistic-flex">⚡ Flex</span>
-                      )}
-                      {item.free_shipping && (
-                        <span className="logistic-badge logistic-free">🆓</span>
                       )}
                     </div>
                   </td>
@@ -506,7 +477,7 @@ export default function StockPage() {
                   <span className="logistic-badge logistic-flex">⚡ Flex</span>
                 )}
                 {item.free_shipping && <span className="logistic-badge logistic-free">🆓</span>}
-                <span className="status-badge" style={{ backgroundColor: statusColor(item.status) }}>{statusLabel(item.status)}</span>
+                <span className={`status-badge status-${item.status}`}>{statusLabel(item.status)}</span>
                 {item.permalink && (
                   <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
                 )}
@@ -535,39 +506,49 @@ export default function StockPage() {
 
       <style>{`
         .stock-page {
-          padding: 24px 32px 48px;
+          padding: 32px 40px 48px;
           max-width: 1400px;
           margin: 0 auto;
         }
         .header {
           display: flex;
           justify-content: space-between;
-          align-items: center;
+          align-items: flex-start;
           margin-bottom: 24px;
           gap: 16px;
         }
         .header h1 {
-          margin: 0;
-          font-size: 28px;
-          color: #1a1a1a;
+          margin: 0 0 4px;
+          font-size: 26px;
+          font-weight: 700;
+          color: var(--text-primary);
         }
         .subtitle {
-          margin: 4px 0 0;
+          margin: 0;
           font-size: 13px;
-          color: #888;
+          color: var(--text-muted);
         }
         .btn-refresh {
-          background: #4CAF50;
-          color: white;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%);
+          color: var(--bg-base);
           border: none;
-          padding: 10px 18px;
-          border-radius: 8px;
+          padding: 11px 18px;
+          border-radius: 10px;
           font-size: 14px;
           font-weight: 600;
           cursor: pointer;
+          font-family: inherit;
+          box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25);
+          transition: all 0.15s ease;
           white-space: nowrap;
         }
-        .btn-refresh:hover:not(:disabled) { background: #45a049; }
+        .btn-refresh:hover:not(:disabled) {
+          transform: translateY(-1px);
+          box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4);
+        }
         .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
 
         /* KPIs */
@@ -578,43 +559,64 @@ export default function StockPage() {
           margin-bottom: 16px;
         }
         .kpi {
-          background: white;
-          padding: 16px;
-          border-radius: 10px;
-          border-top: 3px solid;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
+          border-radius: 12px;
+          padding: 16px 18px;
+          position: relative;
+          overflow: hidden;
         }
-        .kpi-blue { border-top-color: #2196F3; }
-        .kpi-green { border-top-color: #4CAF50; }
-        .kpi-yellow { border-top-color: #FF9800; }
-        .kpi-red { border-top-color: #f44336; }
-        .kpi-label { font-size: 12px; color: #666; margin-bottom: 6px; }
-        .kpi-value { font-size: 24px; font-weight: 700; color: #1a1a1a; }
+        .kpi::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 3px;
+          background: var(--kpi-c);
+          opacity: 0.7;
+        }
+        .kpi-label {
+          font-size: 11px;
+          color: var(--text-muted);
+          margin-bottom: 6px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+        }
+        .kpi-value {
+          font-size: 22px;
+          font-weight: 700;
+          color: var(--text-primary);
+        }
 
         /* Toggle archivadas */
         .archived-toggle {
-          margin-bottom: 12px;
+          margin-bottom: 14px;
         }
         .toggle-label {
           display: inline-flex;
           align-items: center;
           gap: 8px;
-          background: white;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
           padding: 8px 14px;
-          border-radius: 8px;
+          border-radius: 10px;
           font-size: 13px;
-          color: #555;
+          color: var(--text-secondary);
           cursor: pointer;
           user-select: none;
+          transition: border-color 0.15s ease;
         }
-        .toggle-label input { cursor: pointer; }
+        .toggle-label:hover { border-color: var(--border-medium); }
+        .toggle-label input { cursor: pointer; accent-color: var(--accent); }
 
-        /* Action bar (cuando hay selección) */
+        /* Action bar */
         .action-bar {
           display: flex;
           align-items: center;
           gap: 12px;
-          background: #1a1a1a;
-          color: white;
+          background: linear-gradient(135deg, rgba(62, 229, 224, 0.12) 0%, rgba(28, 160, 196, 0.08) 100%);
+          color: var(--text-primary);
+          border: 1px solid var(--border-medium);
           padding: 12px 16px;
           border-radius: 10px;
           margin-bottom: 16px;
@@ -622,33 +624,39 @@ export default function StockPage() {
         }
         .action-text { flex: 1; font-size: 14px; }
         .btn-action {
-          background: #FF9800;
-          color: white;
+          background: var(--warning);
+          color: var(--bg-base);
           border: none;
-          padding: 8px 16px;
-          border-radius: 6px;
-          font-size: 14px;
+          padding: 9px 16px;
+          border-radius: 8px;
+          font-size: 13px;
           font-weight: 600;
           cursor: pointer;
+          font-family: inherit;
         }
-        .btn-action:hover:not(:disabled) { background: #f57c00; }
+        .btn-action:hover:not(:disabled) { filter: brightness(1.1); }
         .btn-action:disabled { opacity: 0.6; cursor: not-allowed; }
         .btn-clear-sel {
           background: transparent;
-          color: #ccc;
-          border: 1px solid #555;
+          color: var(--text-muted);
+          border: 1px solid var(--border-subtle);
           padding: 8px 14px;
-          border-radius: 6px;
+          border-radius: 8px;
           font-size: 13px;
           cursor: pointer;
+          font-family: inherit;
         }
-        .btn-clear-sel:hover { color: white; border-color: #888; }
+        .btn-clear-sel:hover {
+          color: var(--text-primary);
+          border-color: var(--border-medium);
+        }
 
         /* Filtros */
         .filtros {
-          background: white;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
           padding: 16px;
-          border-radius: 10px;
+          border-radius: 12px;
           margin-bottom: 16px;
           display: flex;
           flex-direction: column;
@@ -658,95 +666,145 @@ export default function StockPage() {
         .search-input {
           flex: 1;
           padding: 10px 14px;
-          border: 1px solid #ddd;
+          background: var(--bg-elevated);
+          border: 1px solid var(--border-subtle);
           border-radius: 8px;
           font-size: 14px;
+          color: var(--text-primary);
+          font-family: inherit;
+          outline: none;
+          transition: border-color 0.15s ease;
         }
+        .search-input::placeholder { color: var(--text-muted); }
+        .search-input:focus { border-color: var(--accent); }
         .btn-search {
-          background: #1a1a1a;
-          color: white;
+          background: var(--accent);
+          color: var(--bg-base);
           border: none;
           padding: 10px 18px;
           border-radius: 8px;
           font-size: 14px;
+          font-weight: 600;
           cursor: pointer;
+          font-family: inherit;
         }
+        .btn-search:hover { background: var(--accent-hover); }
         .btn-clear {
-          background: #f0f0f0;
-          color: #666;
-          border: none;
+          background: var(--bg-elevated);
+          color: var(--text-muted);
+          border: 1px solid var(--border-subtle);
           padding: 10px 14px;
           border-radius: 8px;
           cursor: pointer;
+          font-family: inherit;
         }
         .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
         .dropdowns select {
-          padding: 8px 12px;
-          border: 1px solid #ddd;
+          padding: 9px 12px;
+          background: var(--bg-elevated);
+          border: 1px solid var(--border-subtle);
           border-radius: 8px;
-          font-size: 14px;
-          background: white;
+          font-size: 13px;
+          color: var(--text-primary);
           cursor: pointer;
-          min-width: 140px;
+          font-family: inherit;
+          min-width: 150px;
+          outline: none;
+        }
+        .dropdowns select:focus { border-color: var(--accent); }
+        .dropdowns select option {
+          background: var(--bg-elevated);
+          color: var(--text-primary);
         }
 
-        .counter { font-size: 13px; color: #666; margin-bottom: 12px; }
+        .counter {
+          font-size: 13px;
+          color: var(--text-muted);
+          margin-bottom: 12px;
+        }
 
         /* Tabla */
         .tabla-wrapper {
-          background: white;
-          border-radius: 10px;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
+          border-radius: 12px;
           overflow: hidden;
           overflow-x: auto;
         }
-        .tabla { width: 100%; border-collapse: collapse; }
+        .tabla {
+          width: 100%;
+          border-collapse: collapse;
+        }
         .tabla th {
-          background: #fafafa;
+          background: var(--bg-elevated);
           padding: 12px 16px;
           text-align: left;
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 600;
-          color: #555;
+          color: var(--text-muted);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
-          border-bottom: 1px solid #eee;
+          letter-spacing: 0.6px;
+          border-bottom: 1px solid var(--border-subtle);
         }
         .tabla td {
           padding: 12px 16px;
-          border-bottom: 1px solid #f0f0f0;
-          font-size: 14px;
+          border-bottom: 1px solid var(--border-subtle);
+          font-size: 13px;
+          color: var(--text-secondary);
           vertical-align: middle;
         }
         .tabla tr:last-child td { border-bottom: none; }
-        .tabla tr.stock-zero { background: #fff5f5; }
-        .tabla tr.stock-zero .td-stock strong { color: #d32f2f; }
-        .tabla tr.stock-low { background: #fffbf0; }
-        .tabla tr.stock-low .td-stock strong { color: #e65100; }
-        .tabla tr.fila-selected { background: #e3f2fd !important; }
+        .tabla tr.stock-zero { background: rgba(255, 71, 87, 0.06); }
+        .tabla tr.stock-zero .td-stock strong { color: var(--danger); }
+        .tabla tr.stock-low { background: rgba(255, 167, 38, 0.05); }
+        .tabla tr.stock-low .td-stock strong { color: var(--warning); }
+        .tabla tr.fila-selected { background: rgba(62, 229, 224, 0.08) !important; }
 
-        .col-check { width: 32px; text-align: center; }
-        .col-check input { cursor: pointer; transform: scale(1.2); }
+        .col-check { width: 36px; text-align: center; }
+        .col-check input {
+          cursor: pointer;
+          transform: scale(1.2);
+          accent-color: var(--accent);
+        }
 
         .thumb {
-          width: 48px; height: 48px;
+          width: 44px; height: 44px;
           object-fit: cover;
           border-radius: 6px;
-          background: #f5f5f5;
+          background: var(--bg-elevated);
+          border: 1px solid var(--border-subtle);
         }
         .thumb-placeholder {
-          width: 48px; height: 48px;
-          background: #f5f5f5;
+          width: 44px; height: 44px;
+          background: var(--bg-elevated);
+          border: 1px solid var(--border-subtle);
           border-radius: 6px;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 22px;
+          font-size: 20px;
         }
 
         .td-title { max-width: 380px; }
-        .title-text { font-weight: 500; color: #1a1a1a; line-height: 1.3; }
-        .sku { font-size: 11px; color: #888; font-family: monospace; margin-top: 2px; }
-        .td-stock strong { font-size: 16px; }
+        .title-text {
+          font-weight: 500;
+          color: var(--text-primary);
+          line-height: 1.3;
+        }
+        .sku {
+          font-size: 11px;
+          color: var(--text-muted);
+          font-family: monospace;
+          margin-top: 2px;
+        }
+        .td-stock strong {
+          font-size: 15px;
+          color: var(--text-primary);
+        }
+        .td-num {
+          color: var(--text-secondary);
+          font-variant-numeric: tabular-nums;
+        }
 
         .logistic-badges {
           display: flex;
@@ -756,52 +814,85 @@ export default function StockPage() {
         .logistic-badge {
           display: inline-block;
           padding: 3px 8px;
-          background: #f0f0f0;
-          color: #555;
+          background: var(--bg-elevated);
+          color: var(--text-secondary);
+          border: 1px solid var(--border-subtle);
           border-radius: 6px;
-          font-size: 12px;
+          font-size: 11px;
+          font-weight: 500;
           white-space: nowrap;
         }
         .logistic-flex {
-          background: #fff3e0;
-          color: #e65100;
-          font-weight: 600;
+          background: rgba(255, 167, 38, 0.12);
+          color: var(--warning);
+          border-color: rgba(255, 167, 38, 0.3);
+        }
+        .logistic-self_service {
+          background: rgba(255, 167, 38, 0.12);
+          color: var(--warning);
+          border-color: rgba(255, 167, 38, 0.3);
         }
         .logistic-fulfillment {
-          background: #e8f5e9;
-          color: #2e7d32;
-          font-weight: 600;
+          background: rgba(62, 229, 224, 0.12);
+          color: var(--accent);
+          border-color: var(--border-medium);
         }
         .logistic-cross_docking {
-          background: #e3f2fd;
-          color: #1565c0;
+          background: rgba(28, 160, 196, 0.15);
+          color: var(--accent-secondary);
+          border-color: rgba(28, 160, 196, 0.3);
         }
         .logistic-drop_off {
-          background: #f3e5f5;
-          color: #6a1b9a;
+          background: rgba(28, 160, 196, 0.1);
+          color: var(--text-secondary);
+          border-color: var(--border-subtle);
         }
         .logistic-free {
-          background: #e1f5fe;
-          color: #0277bd;
+          background: rgba(62, 229, 224, 0.1);
+          color: var(--accent);
+          border-color: var(--border-medium);
         }
+
         .status-badge {
           display: inline-block;
           padding: 3px 10px;
-          color: white;
-          border-radius: 12px;
+          border-radius: 10px;
           font-size: 11px;
           font-weight: 600;
+          letter-spacing: 0.3px;
         }
+        .status-active {
+          background: rgba(62, 229, 224, 0.15);
+          color: var(--accent);
+          border: 1px solid var(--border-medium);
+        }
+        .status-paused {
+          background: rgba(255, 167, 38, 0.15);
+          color: var(--warning);
+          border: 1px solid rgba(255, 167, 38, 0.3);
+        }
+        .status-closed {
+          background: var(--bg-elevated);
+          color: var(--text-muted);
+          border: 1px solid var(--border-subtle);
+        }
+        .status-under_review {
+          background: rgba(28, 160, 196, 0.15);
+          color: var(--accent-secondary);
+          border: 1px solid rgba(28, 160, 196, 0.3);
+        }
+
         .btn-ver {
-          color: #2196F3;
+          color: var(--accent);
           text-decoration: none;
           font-size: 13px;
           font-weight: 600;
           white-space: nowrap;
+          transition: opacity 0.15s ease;
         }
-        .btn-ver:hover { text-decoration: underline; }
+        .btn-ver:hover { opacity: 0.7; }
 
-        /* Cards mobile (ocultas en desktop) */
+        /* Cards mobile */
         .cards-mobile { display: none; }
 
         /* Paginación */
@@ -813,22 +904,33 @@ export default function StockPage() {
           margin-top: 24px;
         }
         .paginacion button {
-          background: white;
-          border: 1px solid #ddd;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
+          color: var(--text-secondary);
           padding: 8px 14px;
-          border-radius: 6px;
+          border-radius: 8px;
           cursor: pointer;
           font-size: 14px;
+          font-family: inherit;
+        }
+        .paginacion button:hover:not(:disabled) {
+          background: var(--bg-card-hover);
+          border-color: var(--border-medium);
         }
         .paginacion button:disabled { opacity: 0.4; cursor: not-allowed; }
-        .paginacion span { font-size: 14px; color: #555; padding: 0 12px; }
+        .paginacion span {
+          font-size: 13px;
+          color: var(--text-muted);
+          padding: 0 12px;
+        }
 
         .empty {
-          background: white;
+          background: var(--bg-card);
+          border: 1px solid var(--border-subtle);
           padding: 48px;
           text-align: center;
-          border-radius: 10px;
-          color: #888;
+          border-radius: 12px;
+          color: var(--text-muted);
           margin-top: 16px;
         }
 
@@ -841,32 +943,39 @@ export default function StockPage() {
             gap: 12px;
           }
           .header h1 { font-size: 22px; }
-          .btn-refresh { width: 100%; }
+          .btn-refresh { width: 100%; justify-content: center; }
 
           .kpis { grid-template-columns: repeat(2, 1fr); }
-          .kpi-value { font-size: 20px; }
+          .kpi-value { font-size: 18px; }
 
           .action-bar {
             flex-direction: column;
             align-items: stretch;
             gap: 8px;
           }
-          .action-bar > * { width: 100%; }
+          .action-bar > * { width: 100%; text-align: center; }
 
           .dropdowns select { flex: 1; min-width: 0; }
 
           .tabla-wrapper { display: none; }
-          .cards-mobile { display: flex; flex-direction: column; gap: 12px; }
-          .card-item {
-            background: white;
-            padding: 14px;
-            border-radius: 10px;
+          .cards-mobile {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
           }
-          .card-item.stock-zero { background: #fff5f5; }
-          .card-item.stock-low { background: #fffbf0; }
+          .card-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            padding: 14px;
+            border-radius: 12px;
+          }
+          .card-item.stock-zero { border-color: rgba(255, 71, 87, 0.3); }
+          .card-item.stock-zero .card-stats strong { color: var(--danger); }
+          .card-item.stock-low { border-color: rgba(255, 167, 38, 0.3); }
+          .card-item.stock-low .card-stats strong { color: var(--warning); }
           .card-item.card-selected {
-            outline: 2px solid #2196F3;
-            outline-offset: -2px;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(62, 229, 224, 0.2);
           }
           .card-top {
             display: flex;
@@ -878,6 +987,7 @@ export default function StockPage() {
             transform: scale(1.3);
             margin-top: 14px;
             cursor: pointer;
+            accent-color: var(--accent);
           }
           .card-info { flex: 1; min-width: 0; }
           .card-title {
@@ -885,21 +995,26 @@ export default function StockPage() {
             font-size: 14px;
             line-height: 1.3;
             margin-bottom: 4px;
+            color: var(--text-primary);
           }
           .card-stats {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 8px;
-            padding: 8px 0;
-            border-top: 1px solid #f0f0f0;
-            border-bottom: 1px solid #f0f0f0;
+            padding: 10px 0;
+            border-top: 1px solid var(--border-subtle);
+            border-bottom: 1px solid var(--border-subtle);
             font-size: 13px;
+            color: var(--text-secondary);
           }
+          .card-stats strong { color: var(--text-primary); }
           .stat-label {
             display: block;
-            font-size: 11px;
-            color: #888;
+            font-size: 10px;
+            color: var(--text-muted);
             text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 2px;
           }
           .card-bottom {
             display: flex;
