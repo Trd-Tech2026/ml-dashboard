@@ -20,6 +20,8 @@ type Item = {
   seller_sku: string | null
   last_updated: string | null
   archived: boolean
+  is_manual?: boolean
+  cost?: number | null
 }
 
 type Group = {
@@ -33,6 +35,7 @@ type Group = {
   minPrice: number
   maxPrice: number
   currency: string
+  is_manual?: boolean
 }
 
 type Kpis = {
@@ -41,6 +44,7 @@ type Kpis = {
   critico: number
   stock_total: number
   archived_count: number
+  manual_count?: number
 }
 
 type SyncState = {
@@ -168,17 +172,16 @@ function itemsToFakeGroups(items: Item[]): Group[] {
     minPrice: item.price,
     maxPrice: item.price,
     currency: item.currency,
+    is_manual: !!item.is_manual,
   }))
 }
 
 // ===== Componente principal =====
 export default function StockPage() {
-  // Tab activo: 'productos' | 'combos'
   const [activeTab, setActiveTab] = useState<'productos' | 'combos'>('productos')
 
   return (
     <div className="stock-page">
-      {/* TABS */}
       <div className="tabs-header">
         <button
           className={`tab ${activeTab === 'productos' ? 'tab-active' : ''}`}
@@ -235,7 +238,7 @@ export default function StockPage() {
 }
 
 // ============================================================
-// VISTA: PRODUCTOS (la tabla agrupada por SKU que ya tenías)
+// VISTA: PRODUCTOS
 // ============================================================
 function ProductosView() {
   const [data, setData] = useState<StockApiResponse | null>(null)
@@ -256,6 +259,9 @@ function ProductosView() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+
+  const [showManualModal, setShowManualModal] = useState(false)
+  const [editingManualSku, setEditingManualSku] = useState<string | null>(null)
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -342,13 +348,19 @@ function ProductosView() {
     )
     if (!confirmed) return
 
+    const idsToArchive = Array.from(selected).filter(id => !id.startsWith('MANUAL_'))
+    if (idsToArchive.length === 0) {
+      alert('No se pueden archivar productos manuales. Borralos desde el botón de cada producto.')
+      return
+    }
+
     setArchivando(true)
     try {
       const res = await fetch('/api/stock/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          item_ids: Array.from(selected),
+          item_ids: idsToArchive,
           archived: archive,
         }),
       })
@@ -367,7 +379,31 @@ function ProductosView() {
     }
   }
 
-  const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0, archived_count: 0 }
+  const handleEditManual = (sku: string) => {
+    setEditingManualSku(sku)
+    setShowManualModal(true)
+  }
+
+  const handleDeleteManual = async (sku: string, title: string) => {
+    if (!window.confirm(`¿Borrar el producto manual "${title}"?\n\nEsta acción no se puede deshacer.`)) return
+    try {
+      const res = await fetch('/api/manual-items/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seller_sku: sku }),
+      })
+      const json = await res.json()
+      if (!json.ok) {
+        alert(`No se pudo borrar: ${json.error}`)
+        return
+      }
+      await fetchItems()
+    } catch (err) {
+      alert('Error al borrar')
+    }
+  }
+
+  const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0, archived_count: 0, manual_count: 0 }
   const totalFiltered = data?.totalFiltered ?? 0
   const totalGroups = data?.totalGroups ?? 0
 
@@ -403,17 +439,24 @@ function ProductosView() {
             {data?.sync_state?.last_sync_at
               ? `Última sincronización: ${formatearFecha(data.sync_state.last_sync_at)}`
               : 'Sin sincronizaciones aún'}
+            {(kpis.manual_count ?? 0) > 0 && ` · ${kpis.manual_count} producto${kpis.manual_count === 1 ? '' : 's'} manual${kpis.manual_count === 1 ? '' : 'es'}`}
           </p>
         </div>
-        <button className="btn-refresh" onClick={handleRefresh} disabled={refrescando}>
-          <span>{refrescando ? '⏳' : '⟳'}</span>
-          <span>{refrescando ? 'Sincronizando...' : 'Actualizar stock'}</span>
-        </button>
+        <div className="header-actions">
+          <button className="btn-create-manual" onClick={() => { setEditingManualSku(null); setShowManualModal(true); }}>
+            <span>+</span>
+            <span>Producto manual</span>
+          </button>
+          <button className="btn-refresh" onClick={handleRefresh} disabled={refrescando}>
+            <span>{refrescando ? '⏳' : '⟳'}</span>
+            <span>{refrescando ? 'Sincronizando...' : 'Actualizar stock'}</span>
+          </button>
+        </div>
       </div>
 
       <div className="kpis">
         <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
-          <div className="kpi-label">Publicaciones</div>
+          <div className="kpi-label">Productos</div>
           <div className="kpi-value">{kpis.total.toLocaleString('es-AR')}</div>
         </div>
         <div className="kpi" style={{ '--kpi-c': 'var(--success)' } as any}>
@@ -432,19 +475,11 @@ function ProductosView() {
 
       <div className="top-toggles">
         <label className="toggle">
-          <input
-            type="checkbox"
-            checked={groupBySku}
-            onChange={(e) => setGroupBySku(e.target.checked)}
-          />
+          <input type="checkbox" checked={groupBySku} onChange={(e) => setGroupBySku(e.target.checked)} />
           <span>Agrupar por SKU</span>
         </label>
         <label className="toggle">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(e) => setShowArchived(e.target.checked)}
-          />
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           <span>Mostrar archivadas {kpis.archived_count > 0 && `(${kpis.archived_count})`}</span>
         </label>
       </div>
@@ -455,11 +490,7 @@ function ProductosView() {
             <strong>{selected.size}</strong> seleccionada{selected.size === 1 ? '' : 's'}
           </span>
           <button className="btn-action" onClick={() => handleArchive(!showArchived)} disabled={archivando}>
-            {archivando
-              ? '⏳ Procesando...'
-              : showArchived
-                ? '↩️ Desarchivar seleccionadas'
-                : '🗄️ Archivar seleccionadas'}
+            {archivando ? '⏳ Procesando...' : showArchived ? '↩️ Desarchivar seleccionadas' : '🗄️ Archivar seleccionadas'}
           </button>
           <button className="btn-clear-sel" onClick={clearSelection}>Limpiar</button>
         </div>
@@ -476,13 +507,7 @@ function ProductosView() {
           />
           <button type="submit" className="btn-search">Buscar</button>
           {search && (
-            <button
-              type="button"
-              className="btn-clear"
-              onClick={() => { setSearchInput(''); setSearch('') }}
-            >
-              ✕
-            </button>
+            <button type="button" className="btn-clear" onClick={() => { setSearchInput(''); setSearch('') }}>✕</button>
           )}
         </form>
 
@@ -532,11 +557,7 @@ function ProductosView() {
           <thead>
             <tr>
               <th className="col-check">
-                <input
-                  type="checkbox"
-                  checked={todosEnPaginaSeleccionados}
-                  onChange={selectAllInPage}
-                />
+                <input type="checkbox" checked={todosEnPaginaSeleccionados} onChange={selectAllInPage} />
               </th>
               <th className="col-arrow"></th>
               <th>Foto</th>
@@ -556,41 +577,66 @@ function ProductosView() {
               const groupSelected = group.items.every(i => selected.has(i.item_id))
               const groupPartial = !groupSelected && group.items.some(i => selected.has(i.item_id))
               const single = group.items[0]
+              const isManual = !!single.is_manual
 
               if (!isMulti) {
                 return (
-                  <tr key={group.key} className={`${stockClass(single.available_quantity)} ${selected.has(single.item_id) ? 'fila-selected' : ''}`}>
+                  <tr key={group.key} className={`${stockClass(single.available_quantity)} ${selected.has(single.item_id) ? 'fila-selected' : ''} ${isManual ? 'fila-manual' : ''}`}>
                     <td className="col-check">
                       <input type="checkbox" checked={selected.has(single.item_id)} onChange={() => toggleSelect(single.item_id)} />
                     </td>
                     <td className="col-arrow"></td>
                     <td>
-                      {single.thumbnail
+                      {isManual ? (
+                        <div className="thumb-placeholder thumb-manual">📋</div>
+                      ) : single.thumbnail
                         ? <img src={single.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
                         : <div className="thumb-placeholder">📦</div>
                       }
                     </td>
                     <td className="td-title">
-                      <div className="title-text">{single.title}</div>
+                      <div className="title-text">
+                        {single.title}
+                        {isManual && <span className="badge-manual">MANUAL</span>}
+                      </div>
                       {single.seller_sku
                         ? <div className="sku">SKU: {single.seller_sku}</div>
                         : <div className="sku-missing">Sin SKU</div>
                       }
                     </td>
                     <td className="td-stock"><strong>{single.available_quantity}</strong></td>
-                    <td className="td-num">{single.sold_quantity}</td>
-                    <td className="td-num">{formatearPrecio(single.price, single.currency)}</td>
-                    <td>
-                      <div className="logistic-badges">
-                        <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
-                        {single.is_flex && single.logistic_type !== 'self_service' && (
-                          <span className="logistic-badge logistic-flex">⚡ Flex</span>
-                        )}
-                      </div>
+                    <td className="td-num">{isManual ? '—' : single.sold_quantity}</td>
+                    <td className="td-num">
+                      {isManual
+                        ? (single.cost != null ? <span className="cost-mini">Costo: {formatearPrecio(single.cost, 'ARS')}</span> : <span className="text-dim">—</span>)
+                        : formatearPrecio(single.price, single.currency)
+                      }
                     </td>
-                    <td><span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span></td>
                     <td>
-                      {single.permalink && (
+                      {isManual ? (
+                        <span className="logistic-badge">Sin envío</span>
+                      ) : (
+                        <div className="logistic-badges">
+                          <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
+                          {single.is_flex && single.logistic_type !== 'self_service' && (
+                            <span className="logistic-badge logistic-flex">⚡ Flex</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      {isManual
+                        ? <span className="status-badge status-active">Manual</span>
+                        : <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
+                      }
+                    </td>
+                    <td>
+                      {isManual ? (
+                        <div className="manual-actions">
+                          <button className="btn-mini" onClick={() => handleEditManual(single.seller_sku!)} title="Editar">✏️</button>
+                          <button className="btn-mini btn-mini-danger" onClick={() => handleDeleteManual(single.seller_sku!, single.title)} title="Borrar">🗑️</button>
+                        </div>
+                      ) : single.permalink && (
                         <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
                       )}
                     </td>
@@ -683,89 +729,55 @@ function ProductosView() {
       {/* Cards mobile */}
       <div className="cards-mobile">
         {groups.map((group) => {
-          const isMulti = group.items.length > 1
-          const isExpanded = expandedGroups.has(group.key)
           const single = group.items[0]
-          const groupSelected = group.items.every(i => selected.has(i.item_id))
-
-          if (!isMulti) {
-            const isSelected = selected.has(single.item_id)
-            return (
-              <div key={group.key} className={`card-item ${stockClass(single.available_quantity)} ${isSelected ? 'card-selected' : ''}`}>
-                <div className="card-top">
-                  <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(single.item_id)} className="card-checkbox" />
-                  {single.thumbnail
-                    ? <img src={single.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
-                    : <div className="thumb-placeholder">📦</div>
-                  }
-                  <div className="card-info">
-                    <div className="card-title">{single.title}</div>
-                    {single.seller_sku && <div className="sku">SKU: {single.seller_sku}</div>}
-                  </div>
-                </div>
-                <div className="card-stats">
-                  <div><span className="stat-label">Stock</span> <strong>{single.available_quantity}</strong></div>
-                  <div><span className="stat-label">Vendidos</span> {single.sold_quantity}</div>
-                  <div><span className="stat-label">Precio</span> {formatearPrecio(single.price, single.currency)}</div>
-                </div>
-                <div className="card-bottom">
-                  <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
-                  {single.is_flex && single.logistic_type !== 'self_service' && <span className="logistic-badge logistic-flex">⚡ Flex</span>}
-                  <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
-                  {single.permalink && <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
-                </div>
-              </div>
-            )
-          }
-
+          const isManual = !!single.is_manual
+          const isSelected = selected.has(single.item_id)
           return (
-            <div key={group.key} className={`card-item card-group ${stockClass(group.totalStock)} ${groupSelected ? 'card-selected' : ''}`}>
+            <div key={group.key} className={`card-item ${stockClass(single.available_quantity)} ${isSelected ? 'card-selected' : ''} ${isManual ? 'card-manual' : ''}`}>
               <div className="card-top">
-                <input type="checkbox" checked={groupSelected} onChange={() => toggleSelectGroup(group)} className="card-checkbox" />
-                {group.thumbnail
-                  ? <img src={group.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
+                <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(single.item_id)} className="card-checkbox" />
+                {isManual ? (
+                  <div className="thumb-placeholder thumb-manual">📋</div>
+                ) : single.thumbnail
+                  ? <img src={single.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
                   : <div className="thumb-placeholder">📦</div>
                 }
                 <div className="card-info">
-                  <div className="card-title">{group.title}</div>
-                  <div className="card-meta-row">
-                    <span className="sku">SKU: {group.sku}</span>
-                    <span className="badge-count">{group.items.length} pubs</span>
+                  <div className="card-title">
+                    {single.title}
+                    {isManual && <span className="badge-manual">MANUAL</span>}
                   </div>
+                  {single.seller_sku && <div className="sku">SKU: {single.seller_sku}</div>}
                 </div>
               </div>
               <div className="card-stats">
-                <div><span className="stat-label">Stock total</span> <strong>{group.totalStock}</strong></div>
-                <div><span className="stat-label">Vendidos</span> {group.totalSold}</div>
+                <div><span className="stat-label">Stock</span> <strong>{single.available_quantity}</strong></div>
+                <div><span className="stat-label">Vendidos</span> {isManual ? '—' : single.sold_quantity}</div>
                 <div>
                   <span className="stat-label">Precio</span>{' '}
-                  {group.minPrice === group.maxPrice
-                    ? formatearPrecio(group.minPrice, group.currency)
-                    : `Desde ${formatearPrecio(group.minPrice, group.currency)}`}
+                  {isManual
+                    ? (single.cost != null ? formatearPrecio(single.cost, 'ARS') : '—')
+                    : formatearPrecio(single.price, single.currency)
+                  }
                 </div>
               </div>
-              <button className="expand-mobile" onClick={() => toggleExpand(group.key)}>
-                <span className={`arrow ${isExpanded ? 'arrow-open' : ''}`}>▶</span>
-                <span>{isExpanded ? 'Ocultar publicaciones' : 'Ver publicaciones'}</span>
-              </button>
-              {isExpanded && (
-                <div className="children-mobile">
-                  {group.items.map(item => (
-                    <div key={item.item_id} className="child-mobile">
-                      <input type="checkbox" checked={selected.has(item.item_id)} onChange={() => toggleSelect(item.item_id)} />
-                      <div className="child-info">
-                        <div className="child-id">{item.item_id}</div>
-                        <div className="child-stats">
-                          <span>Stock: <strong>{item.available_quantity}</strong></span>
-                          <span>·</span>
-                          <span>{formatearPrecio(item.price, item.currency)}</span>
-                        </div>
-                      </div>
-                      {item.permalink && <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
+              <div className="card-bottom">
+                {isManual ? (
+                  <>
+                    <span className="status-badge status-active">Manual</span>
+                    <div className="manual-actions">
+                      <button className="btn-mini" onClick={() => handleEditManual(single.seller_sku!)}>✏️ Editar</button>
+                      <button className="btn-mini btn-mini-danger" onClick={() => handleDeleteManual(single.seller_sku!, single.title)}>🗑️ Borrar</button>
                     </div>
-                  ))}
-                </div>
-              )}
+                  </>
+                ) : (
+                  <>
+                    <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
+                    <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
+                    {single.permalink && <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
+                  </>
+                )}
+              </div>
             </div>
           )
         })}
@@ -787,42 +799,54 @@ function ProductosView() {
         </div>
       )}
 
+      {showManualModal && (
+        <ManualItemModal
+          editingSku={editingManualSku}
+          onClose={() => { setShowManualModal(false); setEditingManualSku(null); }}
+          onSaved={async () => { setShowManualModal(false); setEditingManualSku(null); await fetchItems(); }}
+        />
+      )}
+
       <style jsx>{`
-        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
+        .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+        .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
+        .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
+        .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
         .btn-refresh { display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 11px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); transition: all 0.15s ease; white-space: nowrap; }
         .btn-refresh:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4); }
         .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
+
         .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
         .kpi { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden; }
         .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-c); opacity: 0.7; }
         .kpi-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
         .kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+
         .top-toggles { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-        .toggle { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 8px 14px; border-radius: 10px; font-size: 13px; color: var(--text-secondary); cursor: pointer; user-select: none; transition: border-color 0.15s ease; }
-        .toggle:hover { border-color: var(--border-medium); }
-        .toggle input { cursor: pointer; accent-color: var(--accent); }
+        .toggle { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 8px 14px; border-radius: 10px; font-size: 13px; color: var(--text-secondary); cursor: pointer; user-select: none; }
+        .toggle input { accent-color: var(--accent); }
+
         .action-bar { display: flex; align-items: center; gap: 12px; background: linear-gradient(135deg, rgba(62, 229, 224, 0.12) 0%, rgba(28, 160, 196, 0.08) 100%); color: var(--text-primary); border: 1px solid var(--border-medium); padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; flex-wrap: wrap; }
         .action-text { flex: 1; font-size: 14px; }
         .btn-action { background: var(--warning); color: var(--bg-base); border: none; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
-        .btn-action:hover:not(:disabled) { filter: brightness(1.1); }
-        .btn-action:disabled { opacity: 0.6; cursor: not-allowed; }
         .btn-clear-sel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
-        .btn-clear-sel:hover { color: var(--text-primary); border-color: var(--border-medium); }
+
         .filtros { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
         .search-form { display: flex; gap: 8px; }
         .search-input { flex: 1; padding: 10px 14px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; }
         .search-input::placeholder { color: var(--text-muted); }
         .search-input:focus { border-color: var(--accent); }
         .btn-search { background: var(--accent); color: var(--bg-base); border: none; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
-        .btn-search:hover { background: var(--accent-hover); }
         .btn-clear { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: inherit; }
         .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
         .dropdowns select { padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; font-family: inherit; min-width: 150px; outline: none; }
-        .dropdowns select:focus { border-color: var(--accent); }
         .dropdowns select option { background: var(--bg-elevated); color: var(--text-primary); }
+
         .counter { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+
         .tabla-wrapper { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; overflow: hidden; overflow-x: auto; }
         .tabla { width: 100%; border-collapse: collapse; }
         .tabla th { background: var(--bg-elevated); padding: 12px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 1px solid var(--border-subtle); }
@@ -833,89 +857,290 @@ function ProductosView() {
         .tabla tr.stock-low { background: rgba(255, 167, 38, 0.05); }
         .tabla tr.stock-low .td-stock strong { color: var(--warning); }
         .tabla tr.fila-selected { background: rgba(62, 229, 224, 0.08) !important; }
+        .tabla tr.fila-manual { background: rgba(62, 229, 224, 0.04); }
         .tabla tr.group-row { font-weight: 500; }
-        .tabla tr.group-row:hover { background: var(--bg-card-hover); }
         .tabla tr.child-row { background: rgba(0, 0, 0, 0.18); font-size: 12px; }
         .tabla tr.child-row td { padding: 9px 16px; }
+
         .col-check { width: 36px; text-align: center; }
         .col-check input { cursor: pointer; transform: scale(1.2); accent-color: var(--accent); }
         .col-arrow { width: 32px; text-align: center; }
         .arrow-btn { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 11px; padding: 4px 8px; }
         .arrow { display: inline-block; transition: transform 0.18s ease; }
         .arrow-open { transform: rotate(90deg); color: var(--accent); }
+
         .thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); }
         .thumb-placeholder { width: 44px; height: 44px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .thumb-manual { border-color: var(--accent); background: rgba(62, 229, 224, 0.08); color: var(--accent); }
+
         .td-title { max-width: 380px; }
-        .title-text { font-weight: 500; color: var(--text-primary); line-height: 1.3; }
+        .title-text { font-weight: 500; color: var(--text-primary); line-height: 1.3; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .title-text-child { font-family: monospace; font-size: 12px; color: var(--accent); }
         .sku { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 2px; }
         .sku-missing { font-size: 11px; color: var(--text-dim); font-style: italic; margin-top: 2px; }
+        .badge-manual { background: rgba(62, 229, 224, 0.15); color: var(--accent); padding: 2px 7px; border-radius: 6px; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; border: 1px solid var(--border-medium); }
         .group-meta { display: flex; align-items: center; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
         .badge-count { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; border: 1px solid var(--border-subtle); }
         .price-range { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
         .price-range small { color: var(--text-muted); margin: 0 2px; }
         .td-summary { color: var(--text-muted); font-size: 11px; font-style: italic; }
         .summary-text { opacity: 0.7; }
+
         .td-stock strong { font-size: 15px; color: var(--text-primary); }
         .td-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+        .cost-mini { font-size: 11px; color: var(--text-muted); }
+        .text-dim { color: var(--text-dim); }
         .td-child-thumb { color: var(--text-dim); padding-left: 24px !important; }
         .child-indent { color: var(--text-dim); }
+
         .logistic-badges { display: flex; flex-wrap: wrap; gap: 4px; }
         .logistic-badge { display: inline-block; padding: 3px 8px; background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: 11px; font-weight: 500; white-space: nowrap; }
         .logistic-flex, .logistic-self_service { background: rgba(255, 167, 38, 0.12); color: var(--warning); border-color: rgba(255, 167, 38, 0.3); }
         .logistic-fulfillment { background: rgba(62, 229, 224, 0.12); color: var(--accent); border-color: var(--border-medium); }
         .logistic-cross_docking { background: rgba(28, 160, 196, 0.15); color: var(--accent-secondary); border-color: rgba(28, 160, 196, 0.3); }
-        .logistic-drop_off { background: rgba(28, 160, 196, 0.1); color: var(--text-secondary); border-color: var(--border-subtle); }
-        .logistic-free { background: rgba(62, 229, 224, 0.1); color: var(--accent); border-color: var(--border-medium); }
+
         .status-badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
         .status-active { background: rgba(62, 229, 224, 0.15); color: var(--accent); border: 1px solid var(--border-medium); }
         .status-paused { background: rgba(255, 167, 38, 0.15); color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.3); }
         .status-closed { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-subtle); }
-        .status-under_review { background: rgba(28, 160, 196, 0.15); color: var(--accent-secondary); border: 1px solid rgba(28, 160, 196, 0.3); }
-        .btn-ver { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; transition: opacity 0.15s ease; }
-        .btn-ver:hover { opacity: 0.7; }
+
+        .btn-ver { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; }
+        .manual-actions { display: flex; gap: 6px; }
+        .btn-mini { background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-subtle); padding: 5px 9px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
+        .btn-mini:hover { border-color: var(--border-medium); color: var(--text-primary); }
+        .btn-mini-danger:hover { border-color: rgba(255, 71, 87, 0.4); color: var(--danger); }
+
         .cards-mobile { display: none; }
+
         .paginacion { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 24px; }
         .paginacion button { background: var(--bg-card); border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; font-family: inherit; }
-        .paginacion button:hover:not(:disabled) { background: var(--bg-card-hover); border-color: var(--border-medium); }
         .paginacion button:disabled { opacity: 0.4; cursor: not-allowed; }
         .paginacion span { font-size: 13px; color: var(--text-muted); padding: 0 12px; }
+
         .empty { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 48px; text-align: center; border-radius: 12px; color: var(--text-muted); margin-top: 16px; }
+
         @media (max-width: 768px) {
           .header { flex-direction: column; align-items: stretch; gap: 12px; }
           .header h1 { font-size: 22px; }
-          .btn-refresh { width: 100%; justify-content: center; }
+          .header-actions { flex-direction: column; }
+          .btn-create-manual, .btn-refresh { width: 100%; justify-content: center; }
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
           .top-toggles { flex-direction: column; }
-          .toggle { justify-content: flex-start; }
           .action-bar { flex-direction: column; align-items: stretch; gap: 8px; }
-          .action-bar > * { width: 100%; text-align: center; }
           .dropdowns select { flex: 1; min-width: 0; }
           .tabla-wrapper { display: none; }
           .cards-mobile { display: flex; flex-direction: column; gap: 12px; }
           .card-item { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 14px; border-radius: 12px; }
-          .card-item.stock-zero { border-color: rgba(255, 71, 87, 0.3); }
-          .card-item.stock-zero .card-stats strong { color: var(--danger); }
-          .card-item.stock-low { border-color: rgba(255, 167, 38, 0.3); }
-          .card-item.stock-low .card-stats strong { color: var(--warning); }
-          .card-item.card-selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(62, 229, 224, 0.2); }
+          .card-item.card-manual { border-color: var(--border-medium); background: rgba(62, 229, 224, 0.03); }
+          .card-item.card-selected { border-color: var(--accent); }
           .card-top { display: flex; gap: 12px; margin-bottom: 12px; align-items: flex-start; }
           .card-checkbox { transform: scale(1.3); margin-top: 14px; cursor: pointer; accent-color: var(--accent); }
           .card-info { flex: 1; min-width: 0; }
-          .card-title { font-weight: 500; font-size: 14px; line-height: 1.3; margin-bottom: 4px; color: var(--text-primary); }
-          .card-meta-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+          .card-title { font-weight: 500; font-size: 14px; line-height: 1.3; margin-bottom: 4px; color: var(--text-primary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
           .card-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-secondary); }
           .card-stats strong { color: var(--text-primary); }
           .stat-label { display: block; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
           .card-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; flex-wrap: wrap; gap: 8px; }
-          .expand-mobile { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px dashed var(--border-subtle); padding: 9px; border-radius: 8px; font-size: 12px; cursor: pointer; margin-top: 10px; width: 100%; font-family: inherit; justify-content: center; }
-          .children-mobile { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
-          .child-mobile { display: flex; gap: 10px; align-items: center; padding: 10px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; }
-          .child-mobile input { accent-color: var(--accent); }
-          .child-info { flex: 1; min-width: 0; }
-          .child-id { font-family: monospace; font-size: 11px; color: var(--accent); }
-          .child-stats { font-size: 12px; color: var(--text-secondary); margin-top: 2px; display: flex; gap: 6px; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+// ============================================================
+// MODAL: CREAR / EDITAR PRODUCTO MANUAL
+// ============================================================
+function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string | null; onClose: () => void; onSaved: () => void }) {
+  const [sku, setSku] = useState('')
+  const [title, setTitle] = useState('')
+  const [stock, setStock] = useState('0')
+  const [cost, setCost] = useState('')
+  const [loading, setLoading] = useState(!!editingSku)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const isEdit = !!editingSku
+
+  useEffect(() => {
+    if (!editingSku) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/manual-items/list?search=${encodeURIComponent(editingSku)}`, { cache: 'no-store' })
+        const json = await res.json()
+        if (cancelled) return
+        const item = (json.items ?? []).find((i: any) => i.seller_sku === editingSku)
+        if (item) {
+          setSku(item.seller_sku)
+          setTitle(item.title)
+          setStock(String(item.available_quantity))
+          setCost(item.cost != null ? String(item.cost) : '')
+        }
+      } catch (err) {
+        if (!cancelled) setError('Error cargando datos del producto')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [editingSku])
+
+  const handleSave = async () => {
+    setError(null)
+
+    const skuTrim = sku.trim()
+    const titleTrim = title.trim()
+    const stockNum = parseInt(stock, 10)
+    const costNum = cost.trim() === '' ? null : parseFloat(cost)
+
+    if (!skuTrim) { setError('El SKU es requerido'); return }
+    if (!titleTrim) { setError('El título es requerido'); return }
+    if (!Number.isInteger(stockNum) || stockNum < 0) { setError('El stock debe ser un número entero ≥ 0'); return }
+    if (costNum !== null && (isNaN(costNum) || costNum < 0)) { setError('El costo debe ser un número ≥ 0'); return }
+
+    setSaving(true)
+    try {
+      const res = await fetch('/api/manual-items/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seller_sku: skuTrim,
+          title: titleTrim,
+          available_quantity: stockNum,
+          cost: costNum,
+          is_edit: isEdit,
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) {
+        setError(json.error ?? 'Error desconocido')
+        return
+      }
+      onSaved()
+    } catch (err: any) {
+      setError(err?.message ?? 'Error de red')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">{isEdit ? 'Editar producto manual' : 'Crear producto manual'}</div>
+            <div className="modal-subtitle">
+              {isEdit ? 'Modificá los datos del producto' : 'Para llaveros, peluches y otros productos que cargás manualmente'}
+            </div>
+          </div>
+          <button className="btn-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          {loading ? (
+            <p className="loading-text">Cargando...</p>
+          ) : (
+            <>
+              <div className="form-row">
+                <label className="form-label">SKU *</label>
+                <input
+                  type="text"
+                  value={sku}
+                  onChange={(e) => setSku(e.target.value.toUpperCase())}
+                  placeholder="Ej: LLAVMICKEY, PELUCHE, etc."
+                  className="form-input"
+                  disabled={isEdit}
+                  autoFocus={!isEdit}
+                />
+                <span className="form-hint">{isEdit ? 'El SKU no se puede cambiar' : 'Identificador único. No puede coincidir con un SKU de Mercado Libre.'}</span>
+              </div>
+
+              <div className="form-row">
+                <label className="form-label">Título *</label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Ej: Llavero Mickey"
+                  className="form-input"
+                />
+              </div>
+
+              <div className="form-row-double">
+                <div>
+                  <label className="form-label">Stock *</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={stock}
+                    onChange={(e) => setStock(e.target.value)}
+                    className="form-input"
+                  />
+                </div>
+                <div>
+                  <label className="form-label">Costo unitario (opcional)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={cost}
+                    onChange={(e) => setCost(e.target.value)}
+                    placeholder="ARS"
+                    className="form-input"
+                  />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {error && (<div className="error-msg">{error}</div>)}
+
+        <div className="modal-footer">
+          <button className="btn-cancel" onClick={onClose} disabled={saving}>Cancelar</button>
+          <button className="btn-save" onClick={handleSave} disabled={saving || loading}>
+            {saving ? 'Guardando...' : (isEdit ? '💾 Guardar cambios' : '✓ Crear producto')}
+          </button>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.15s ease; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 16px; max-width: 560px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+        .modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+        .modal-title { font-size: 18px; color: var(--text-primary); font-weight: 700; line-height: 1.3; margin-bottom: 4px; }
+        .modal-subtitle { font-size: 13px; color: var(--text-muted); }
+        .btn-close { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 14px; flex-shrink: 0; font-family: inherit; }
+        .btn-close:hover { color: var(--text-primary); border-color: var(--border-medium); }
+
+        .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+        .loading-text { color: var(--text-muted); text-align: center; padding: 24px; }
+
+        .form-row { display: flex; flex-direction: column; gap: 6px; }
+        .form-row-double { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .form-row-double > div { display: flex; flex-direction: column; gap: 6px; }
+        .form-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+        .form-input { padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; transition: border-color 0.15s ease; }
+        .form-input:focus { border-color: var(--accent); }
+        .form-input:disabled { opacity: 0.6; cursor: not-allowed; }
+        .form-input::placeholder { color: var(--text-muted); }
+        .form-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+
+        .error-msg { margin: 0 24px; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
+
+        .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
+        .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
+        .btn-cancel:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
+        .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); }
+        .btn-save:hover:not(:disabled) { transform: translateY(-1px); }
+        .btn-save:disabled, .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        @media (max-width: 600px) {
+          .form-row-double { grid-template-columns: 1fr; }
         }
       `}</style>
     </div>
@@ -951,7 +1176,6 @@ function CombosView() {
 
   const allCombos = data?.combos ?? []
 
-  // Filtros
   const searchLower = search.trim().toLowerCase()
   const filtered = allCombos.filter(c => {
     if (searchLower && !c.title.toLowerCase().includes(searchLower) && !c.sku.toLowerCase().includes(searchLower)) return false
@@ -962,11 +1186,9 @@ function CombosView() {
     return true
   })
 
-  // Sort
   const sorted = [...filtered].sort((a, b) => {
     if (sort === 'title_asc') return a.title.localeCompare(b.title, 'es', { sensitivity: 'base' })
     if (sort === 'sold_desc') return b.total_sold - a.total_sold
-    // stock_desc por defecto: usa real si está configurado, sino ml_stock
     const sa = a.is_configured ? (a.real_stock ?? 0) : a.ml_stock
     const sb = b.is_configured ? (b.real_stock ?? 0) : b.ml_stock
     return sb - sa
@@ -1242,7 +1464,6 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
   const [searchResults, setSearchResults] = useState<SkuSearchResult[]>([])
   const [searching, setSearching] = useState(false)
 
-  // Buscar SKUs
   useEffect(() => {
     if (!showSearch || searchQuery.trim().length < 2) {
       setSearchResults([])
