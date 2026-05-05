@@ -817,14 +817,14 @@ function ProductosView() {
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
         .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-        .btn-ingresos {
+        ..btn-ingresos {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: linear-gradient(135deg, rgba(255, 167, 38, 0.15) 0%, rgba(255, 167, 38, 0.05) 100%);
-          color: var(--warning);
-          border: 1px solid rgba(255, 167, 38, 0.5);
-          padding: 11px 18px;
+          background: var(--bg-card);
+          color: var(--text-primary);
+          border: 1px solid var(--border-medium);
+          padding: 11px 16px;
           border-radius: 10px;
           font-size: 13px;
           font-weight: 600;
@@ -833,15 +833,13 @@ function ProductosView() {
           text-decoration: none;
           transition: all 0.15s ease;
           white-space: nowrap;
-          box-shadow: 0 4px 14px rgba(255, 167, 38, 0.15);
         }
         .btn-ingresos:hover {
-          background: linear-gradient(135deg, rgba(255, 167, 38, 0.25) 0%, rgba(255, 167, 38, 0.1) 100%);
-          border-color: var(--warning);
-          transform: translateY(-1px);
-          box-shadow: 0 6px 20px rgba(255, 167, 38, 0.3);
+          background: var(--bg-elevated);
+          border-color: var(--accent);
+          color: var(--accent);
         }
-        .btn-ingresos span:first-child { font-size: 16px; line-height: 1; }
+        .btn-ingresos span:first-child { font-size: 14px; line-height: 1; }
         .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
         .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
