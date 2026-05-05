@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 // ===== Tipos =====
 type Item = {
@@ -242,6 +243,7 @@ export default function StockPage() {
 // VISTA: PRODUCTOS
 // ============================================================
 function ProductosView() {
+  const router = useRouter()
   const [data, setData] = useState<StockApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refrescando, setRefrescando] = useState(false)
@@ -444,10 +446,10 @@ function ProductosView() {
           </p>
         </div>
         <div className="header-actions">
-          <Link href="/stock/ingresos" className="btn-ingresos">
+          <button className="btn-ingresos" onClick={() => router.push('/stock/ingresos')}>
             <span>📦</span>
             <span>Cargar factura</span>
-          </Link>
+          </button>
           <button className="btn-create-manual" onClick={() => { setEditingManualSku(null); setShowManualModal(true); }}>
             <span>+</span>
             <span>Producto manual</span>
