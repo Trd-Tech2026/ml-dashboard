@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 
 // ===== Tipos =====
 type Item = {
@@ -443,6 +444,10 @@ function ProductosView() {
           </p>
         </div>
         <div className="header-actions">
+          <Link href="/stock/ingresos" className="btn-ingresos">
+            <span>📦</span>
+            <span>Cargar factura</span>
+          </Link>
           <button className="btn-create-manual" onClick={() => { setEditingManualSku(null); setShowManualModal(true); }}>
             <span>+</span>
             <span>Producto manual</span>
@@ -812,6 +817,28 @@ function ProductosView() {
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
         .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+        .btn-ingresos {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: transparent;
+          color: var(--warning);
+          border: 1px solid rgba(255, 167, 38, 0.4);
+          padding: 11px 16px;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          text-decoration: none;
+          transition: all 0.15s ease;
+          white-space: nowrap;
+        }
+        .btn-ingresos:hover {
+          background: rgba(255, 167, 38, 0.08);
+          border-color: var(--warning);
+        }
+        .btn-ingresos span:first-child { font-size: 14px; line-height: 1; }
         .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
         .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
@@ -923,7 +950,7 @@ function ProductosView() {
           .header { flex-direction: column; align-items: stretch; gap: 12px; }
           .header h1 { font-size: 22px; }
           .header-actions { flex-direction: column; }
-          .btn-create-manual, .btn-refresh { width: 100%; justify-content: center; }
+          .btn-ingresos, .btn-create-manual, .btn-refresh { width: 100%; justify-content: center; }
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
           .top-toggles { flex-direction: column; }
