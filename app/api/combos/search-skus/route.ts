@@ -3,56 +3,194 @@ import { createClient } from '@supabase/supabase-js'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const q = (searchParams.get('q') ?? '').trim()
-  const excludeSku = searchParams.get('exclude') ?? ''
+const COMBO_PREFIX = 'CBO-'
 
-  if (q.length < 2) {
-    return NextResponse.json({ ok: true, results: [] })
-  }
-
+export async function GET() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  const safe = q.replace(/[,()]/g, ' ')
-
-  // Buscar items por SKU o título, agrupando por SKU único
-  let query = supabase
+  // 1. Buscar combos en items (los que tienen SKU CBO-...)
+  const { data: comboItems, error: itemsError } = await supabase
     .from('items')
-    .select('seller_sku, title, thumbnail, available_quantity')
-    .not('seller_sku', 'is', null)
-    .or(`seller_sku.ilike.%${safe}%,title.ilike.%${safe}%`)
+    .select('item_id, title, thumbnail, permalink, available_quantity, sold_quantity, price, currency, status, seller_sku, archived')
+    .ilike('seller_sku', `${COMBO_PREFIX}%`)
     .eq('archived', false)
-    .limit(50)
+    .order('title', { ascending: true })
 
-  const { data, error } = await query
-
-  if (error) {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  if (itemsError) {
+    return NextResponse.json({ ok: false, error: itemsError.message }, { status: 500 })
   }
 
-  // Agrupar por SKU (puede haber varias publicaciones del mismo SKU)
-  const map = new Map<string, any>()
-  for (const item of (data ?? [])) {
-    if (!item.seller_sku) continue
-    if (item.seller_sku === excludeSku) continue
-    const existing = map.get(item.seller_sku)
-    if (existing) {
-      existing.minStock = Math.min(existing.minStock, item.available_quantity)
+  const items = comboItems ?? []
+
+  // 2. Agrupar combos por SKU
+  const groupsMap = new Map<string, any>()
+  for (const item of items) {
+    const sku = item.seller_sku
+    if (!sku) continue
+    const g = groupsMap.get(sku)
+    if (g) {
+      g.publications.push(item)
+      g.totalStock = Math.min(g.totalStock, item.available_quantity)
+      g.totalSold += item.sold_quantity
     } else {
-      map.set(item.seller_sku, {
-        sku: item.seller_sku,
+      groupsMap.set(sku, {
+        sku,
         title: item.title,
         thumbnail: item.thumbnail,
-        minStock: item.available_quantity,
+        publications: [item],
+        totalStock: item.available_quantity,
+        totalSold: item.sold_quantity,
+        currency: item.currency,
       })
     }
   }
 
-  const results = Array.from(map.values()).slice(0, 20)
+  const combos = Array.from(groupsMap.values())
 
-  return NextResponse.json({ ok: true, results })
+  // 3. Traer la configuración de componentes para todos los combos
+  const skus = combos.map(c => c.sku)
+  let componentsBySku = new Map<string, any[]>()
+
+  if (skus.length > 0) {
+    const { data: comps, error: compsError } = await supabase
+      .from('product_components')
+      .select('parent_sku, component_sku, quantity, notes')
+      .in('parent_sku', skus)
+
+    if (compsError) {
+      return NextResponse.json({ ok: false, error: compsError.message }, { status: 500 })
+    }
+
+    for (const c of (comps ?? [])) {
+      const list = componentsBySku.get(c.parent_sku) ?? []
+      list.push({
+        component_sku: c.component_sku,
+        quantity: c.quantity,
+        notes: c.notes,
+      })
+      componentsBySku.set(c.parent_sku, list)
+    }
+  }
+
+  // 4. Recolectar todos los SKUs de componentes
+  const allComponentSkus = new Set<string>()
+  for (const list of componentsBySku.values()) {
+    for (const c of list) {
+      allComponentSkus.add(c.component_sku)
+    }
+  }
+
+  // 5. Para cada componente, obtener su stock — buscando en items y en manual_items en paralelo
+  let componentItemsBySku = new Map<string, any[]>()
+  let componentManualBySku = new Map<string, any>()
+
+  if (allComponentSkus.size > 0) {
+    const skusArr = Array.from(allComponentSkus)
+    const [mlComps, manualComps] = await Promise.all([
+      supabase
+        .from('items')
+        .select('item_id, title, available_quantity, seller_sku, status, archived')
+        .in('seller_sku', skusArr)
+        .eq('archived', false),
+      supabase
+        .from('manual_items')
+        .select('seller_sku, title, available_quantity')
+        .in('seller_sku', skusArr),
+    ])
+
+    for (const it of (mlComps.data ?? [])) {
+      if (!it.seller_sku) continue
+      const list = componentItemsBySku.get(it.seller_sku) ?? []
+      list.push(it)
+      componentItemsBySku.set(it.seller_sku, list)
+    }
+
+    for (const m of (manualComps.data ?? [])) {
+      if (!m.seller_sku) continue
+      componentManualBySku.set(m.seller_sku, m)
+    }
+  }
+
+  // 6. Calcular stock real de cada combo
+  const result = combos.map(combo => {
+    const components = componentsBySku.get(combo.sku) ?? []
+    const isConfigured = components.length > 0
+
+    const enrichedComponents = components.map(c => {
+      // Primero buscar en ML, después en manuales
+      const mlItems = componentItemsBySku.get(c.component_sku) ?? []
+      const manualItem = componentManualBySku.get(c.component_sku)
+
+      let minStock = 0
+      let title = '(no encontrado)'
+      let found = false
+      let isManual = false
+
+      if (mlItems.length > 0) {
+        // Es un componente de ML (puede tener múltiples publicaciones del mismo SKU)
+        minStock = Math.min(...mlItems.map(i => i.available_quantity))
+        title = mlItems[0].title
+        found = true
+      } else if (manualItem) {
+        // Es un producto manual
+        minStock = manualItem.available_quantity
+        title = manualItem.title
+        found = true
+        isManual = true
+      }
+
+      const possibleCombos = c.quantity > 0 ? Math.floor(minStock / c.quantity) : 0
+      return {
+        component_sku: c.component_sku,
+        component_title: title,
+        quantity: c.quantity,
+        notes: c.notes,
+        component_stock: minStock,
+        possible_combos: possibleCombos,
+        found,
+        is_manual: isManual,
+      }
+    })
+
+    let realStock: number | null = null
+    if (isConfigured) {
+      const validCombos = enrichedComponents.filter(c => c.found)
+      if (validCombos.length > 0) {
+        realStock = Math.min(...validCombos.map(c => c.possible_combos))
+      } else {
+        realStock = 0
+      }
+    }
+
+    return {
+      sku: combo.sku,
+      title: combo.title,
+      thumbnail: combo.thumbnail,
+      ml_stock: combo.totalStock,
+      real_stock: realStock,
+      total_sold: combo.totalSold,
+      publications_count: combo.publications.length,
+      currency: combo.currency,
+      is_configured: isConfigured,
+      components: enrichedComponents,
+      publications: combo.publications.map((p: any) => ({
+        item_id: p.item_id,
+        permalink: p.permalink,
+        available_quantity: p.available_quantity,
+        price: p.price,
+        status: p.status,
+      })),
+    }
+  })
+
+  return NextResponse.json({
+    ok: true,
+    combos: result,
+    total: result.length,
+    configured: result.filter(c => c.is_configured).length,
+    unconfigured: result.filter(c => !c.is_configured).length,
+  })
 }
