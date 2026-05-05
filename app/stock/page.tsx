@@ -817,7 +817,7 @@ function ProductosView() {
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
         .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-        ..btn-ingresos {
+        .btn-ingresos {
           display: flex;
           align-items: center;
           gap: 8px;
