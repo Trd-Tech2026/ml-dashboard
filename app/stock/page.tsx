@@ -821,10 +821,10 @@ function ProductosView() {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: transparent;
+          background: linear-gradient(135deg, rgba(255, 167, 38, 0.15) 0%, rgba(255, 167, 38, 0.05) 100%);
           color: var(--warning);
-          border: 1px solid rgba(255, 167, 38, 0.4);
-          padding: 11px 16px;
+          border: 1px solid rgba(255, 167, 38, 0.5);
+          padding: 11px 18px;
           border-radius: 10px;
           font-size: 13px;
           font-weight: 600;
@@ -833,12 +833,15 @@ function ProductosView() {
           text-decoration: none;
           transition: all 0.15s ease;
           white-space: nowrap;
+          box-shadow: 0 4px 14px rgba(255, 167, 38, 0.15);
         }
         .btn-ingresos:hover {
-          background: rgba(255, 167, 38, 0.08);
+          background: linear-gradient(135deg, rgba(255, 167, 38, 0.25) 0%, rgba(255, 167, 38, 0.1) 100%);
           border-color: var(--warning);
+          transform: translateY(-1px);
+          box-shadow: 0 6px 20px rgba(255, 167, 38, 0.3);
         }
-        .btn-ingresos span:first-child { font-size: 14px; line-height: 1; }
+        .btn-ingresos span:first-child { font-size: 16px; line-height: 1; }
         .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
         .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
