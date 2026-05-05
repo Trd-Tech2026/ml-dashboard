@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import Link from 'next/link'
+import { useState, useRef, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 
 type ExtractedSupplier = {
   name: string | null
@@ -29,20 +29,65 @@ type ExtractionResult = {
   items: ExtractedItem[]
 }
 
+type Suggestion = {
+  seller_sku: string
+  title: string
+  thumbnail: string | null
+  current_stock: number
+  is_manual: boolean
+  match_type: 'exact' | 'contains' | 'learned'
+  match_score: number
+}
+
+type MatchedItem = {
+  index: number
+  supplier_code: string | null
+  description: string | null
+  quantity: number | null
+  unit_cost: number | null
+  subtotal: number | null
+  suggestions: Suggestion[]
+  best_match: Suggestion | null
+}
+
+type Step = 'upload' | 'matching' | 'confirm'
+
+type EditedItem = {
+  index: number
+  supplier_code: string | null
+  description: string | null
+  quantity: number
+  unit_cost: number | null
+  selected_sku: string | null
+  selected_title: string | null
+  selected_is_manual: boolean
+  selected_current_stock: number
+  match_type: 'exact' | 'contains' | 'learned' | 'manual' | null
+  suggestions: Suggestion[]
+}
+
 export default function IngresosPage() {
+  const router = useRouter()
+  const [step, setStep] = useState<Step>('upload')
+
+  // Estado de la pantalla 1 (upload)
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [result, setResult] = useState<ExtractionResult | null>(null)
-  const [usage, setUsage] = useState<{ input_tokens: number; output_tokens: number } | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Datos extraídos por OCR
+  const [extracted, setExtracted] = useState<ExtractionResult | null>(null)
+  const [filePath, setFilePath] = useState<string | null>(null)
+  const [usage, setUsage] = useState<{ input_tokens: number; output_tokens: number } | null>(null)
+
+  // Estado de la pantalla 2 (matching)
+  const [matchedItems, setMatchedItems] = useState<EditedItem[]>([])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     setError(null)
-    setResult(null)
-    setUsage(null)
     if (!f) {
       setFile(null)
       setPreview(null)
@@ -62,10 +107,9 @@ export default function IngresosPage() {
     if (!file) return
     setLoading(true)
     setError(null)
-    setResult(null)
-    setUsage(null)
 
     try {
+      // 1. OCR
       const formData = new FormData()
       formData.append('file', file)
 
@@ -76,12 +120,50 @@ export default function IngresosPage() {
       const json = await res.json()
 
       if (!json.ok) {
-        setError(json.error ?? 'Error desconocido')
+        setError(json.error ?? 'Error al procesar la factura')
+        setLoading(false)
         return
       }
 
-      setResult(json.extracted)
+      setExtracted(json.extracted)
+      setFilePath(json.file_path)
       setUsage(json.usage)
+
+      // 2. Matching automático
+      const matchRes = await fetch('/api/purchases/match-skus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: json.extracted.items ?? [],
+          supplier_cuit: json.extracted.supplier?.cuit ?? null,
+        }),
+      })
+      const matchJson = await matchRes.json()
+
+      if (!matchJson.ok) {
+        setError(matchJson.error ?? 'Error en matching de SKUs')
+        setLoading(false)
+        return
+      }
+
+      // Convertir resultado a EditedItem[]
+      const matched: MatchedItem[] = matchJson.matched ?? []
+      const edited: EditedItem[] = matched.map(m => ({
+        index: m.index,
+        supplier_code: m.supplier_code,
+        description: m.description,
+        quantity: m.quantity ?? 0,
+        unit_cost: m.unit_cost,
+        selected_sku: m.best_match?.seller_sku ?? null,
+        selected_title: m.best_match?.title ?? null,
+        selected_is_manual: m.best_match?.is_manual ?? false,
+        selected_current_stock: m.best_match?.current_stock ?? 0,
+        match_type: m.best_match?.match_type ?? null,
+        suggestions: m.suggestions,
+      }))
+
+      setMatchedItems(edited)
+      setStep('matching')
     } catch (err: any) {
       setError(err?.message ?? 'Error de red')
     } finally {
@@ -92,10 +174,19 @@ export default function IngresosPage() {
   const handleReset = () => {
     setFile(null)
     setPreview(null)
-    setResult(null)
-    setError(null)
+    setExtracted(null)
+    setFilePath(null)
     setUsage(null)
+    setMatchedItems([])
+    setError(null)
+    setStep('upload')
     if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const updateItem = (index: number, changes: Partial<EditedItem>) => {
+    setMatchedItems(prev => prev.map(item =>
+      item.index === index ? { ...item, ...changes } : item
+    ))
   }
 
   const formatARS = (n: number | null) => {
@@ -103,22 +194,21 @@ export default function IngresosPage() {
     return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n)
   }
 
-  // Cálculo aproximado del costo en USD
   const estimatedCost = usage
     ? (usage.input_tokens / 1_000_000) * 3 + (usage.output_tokens / 1_000_000) * 15
     : 0
 
-  return (
-    <div className="page">
-      <div className="header">
-        <div>
-          <Link href="/stock" className="back-link">← Volver a Stock</Link>
+  // ===== Render por step =====
+
+  if (step === 'upload') {
+    return (
+      <div className="page">
+        <div className="header">
+          <button className="back-link" onClick={() => router.push('/stock')}>← Volver a Stock</button>
           <h1>📦 Cargar factura de compra</h1>
           <p className="subtitle">Subí una factura y la IA va a extraer los datos automáticamente</p>
         </div>
-      </div>
 
-      {!result && (
         <div className="upload-section">
           <div className="upload-card">
             <div className="upload-zone">
@@ -159,397 +249,522 @@ export default function IngresosPage() {
 
             {file && (
               <button className="btn-process" onClick={handleProcess} disabled={loading}>
-                {loading ? '⏳ Procesando con IA...' : '✨ Extraer datos con IA'}
+                {loading ? '⏳ Procesando con IA y buscando SKUs...' : '✨ Extraer datos con IA'}
               </button>
             )}
 
             {loading && (
               <div className="loading-msg">
-                Esto puede tardar entre 10 y 30 segundos según el tamaño de la factura...
+                Esto puede tardar entre 10 y 30 segundos...
               </div>
             )}
           </div>
         </div>
-      )}
 
-      {error && (
-        <div className="error-banner">
-          <strong>⚠️ Error:</strong> {error}
-          <button className="btn-retry" onClick={handleReset}>Volver a intentar</button>
+        {error && (
+          <div className="error-banner">
+            <strong>⚠️ Error:</strong> {error}
+            <button className="btn-retry" onClick={handleReset}>Volver a intentar</button>
+          </div>
+        )}
+
+        {pageStyles}
+      </div>
+    )
+  }
+
+  if (step === 'matching' && extracted) {
+    const totalMatched = matchedItems.filter(i => i.selected_sku).length
+    const totalUnmatched = matchedItems.length - totalMatched
+    const canContinue = totalMatched === matchedItems.length
+
+    return (
+      <div className="page">
+        <div className="header">
+          <button className="back-link" onClick={handleReset}>← Cargar otra factura</button>
+          <h1>🔗 Matchear productos con tus SKUs</h1>
+          <p className="subtitle">Revisá cada producto y confirmá el SKU correspondiente</p>
         </div>
-      )}
 
-      {result && (
-        <div className="result-section">
-          <div className="result-header">
-            <h2>✅ Datos extraídos</h2>
-            <div className="result-actions">
-              <button className="btn-secondary" onClick={handleReset}>
-                ↺ Cargar otra factura
+        {/* Resumen factura */}
+        <div className="summary-bar">
+          <div>
+            <strong>{extracted.supplier?.name ?? 'Proveedor sin nombre'}</strong>
+            <span> · Factura {extracted.invoice?.number ?? '—'} · {extracted.invoice?.date ?? '—'}</span>
+          </div>
+          <div>
+            <span className={`status-tag ${totalUnmatched > 0 ? 'warning' : 'success'}`}>
+              {totalMatched} / {matchedItems.length} matcheados
+            </span>
+          </div>
+        </div>
+
+        {/* Lista de items para matchear */}
+        <div className="matching-list">
+          {matchedItems.map(item => (
+            <MatchingRow
+              key={item.index}
+              item={item}
+              onUpdate={(changes) => updateItem(item.index, changes)}
+            />
+          ))}
+        </div>
+
+        {error && (
+          <div className="error-banner">
+            <strong>⚠️ Error:</strong> {error}
+          </div>
+        )}
+
+        <div className="bottom-actions">
+          <button className="btn-secondary" onClick={handleReset}>
+            ← Cancelar
+          </button>
+          <button
+            className="btn-process"
+            disabled={!canContinue}
+            onClick={() => setStep('confirm')}
+          >
+            {canContinue ? `Continuar a confirmación →` : `Faltan ${totalUnmatched} producto${totalUnmatched === 1 ? '' : 's'} por matchear`}
+          </button>
+        </div>
+
+        {pageStyles}
+      </div>
+    )
+  }
+
+  // step === 'confirm'
+  if (step === 'confirm' && extracted) {
+    return (
+      <div className="page">
+        <div className="header">
+          <button className="back-link" onClick={() => setStep('matching')}>← Volver a matching</button>
+          <h1>✅ Confirmar ingreso de mercadería</h1>
+          <p className="subtitle">Revisá el resumen final antes de impactar el stock</p>
+        </div>
+
+        <div className="confirm-banner">
+          ⚠️ <strong>Importante:</strong> al confirmar se va a sumar el stock en tu dashboard. Esta acción NO se puede deshacer (aunque podés ajustar manualmente después).
+        </div>
+
+        {/* Datos del proveedor y factura */}
+        <div className="data-block">
+          <h3>Proveedor</h3>
+          <div className="data-grid">
+            <div className="data-item">
+              <span className="data-label">Nombre</span>
+              <span className="data-value">{extracted.supplier?.name ?? '—'}</span>
+            </div>
+            <div className="data-item">
+              <span className="data-label">CUIT</span>
+              <span className="data-value">{extracted.supplier?.cuit ?? '—'}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="data-block">
+          <h3>Factura</h3>
+          <div className="data-grid">
+            <div className="data-item">
+              <span className="data-label">Número</span>
+              <span className="data-value">{extracted.invoice?.number ?? '—'}</span>
+            </div>
+            <div className="data-item">
+              <span className="data-label">Fecha</span>
+              <span className="data-value">{extracted.invoice?.date ?? '—'}</span>
+            </div>
+            <div className="data-item">
+              <span className="data-label">Tipo</span>
+              <span className="data-value">{extracted.invoice?.type ?? '—'}</span>
+            </div>
+            <div className="data-item">
+              <span className="data-label">Total</span>
+              <span className="data-value">{formatARS(extracted.invoice?.total_amount ?? null)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Resumen de cambios al stock */}
+        <div className="data-block">
+          <h3>Cambios al stock ({matchedItems.length} productos)</h3>
+          <div className="items-table-wrap">
+            <table className="items-table">
+              <thead>
+                <tr>
+                  <th>SKU destino</th>
+                  <th>Producto</th>
+                  <th className="num">Stock actual</th>
+                  <th className="num">+ Cantidad</th>
+                  <th className="num">Stock nuevo</th>
+                  <th className="num">Costo unit.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matchedItems.map(item => (
+                  <tr key={item.index}>
+                    <td>
+                      <strong>{item.selected_sku}</strong>
+                      {item.selected_is_manual && <span className="manual-tag">MANUAL</span>}
+                    </td>
+                    <td>{item.selected_title}</td>
+                    <td className="num">{item.selected_current_stock}</td>
+                    <td className="num"><strong className="add-qty">+{item.quantity}</strong></td>
+                    <td className="num"><strong className="new-stock">{item.selected_current_stock + item.quantity}</strong></td>
+                    <td className="num">{formatARS(item.unit_cost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="confirm-actions">
+          <button className="btn-secondary" onClick={() => setStep('matching')}>
+            ← Volver a editar
+          </button>
+          <button className="btn-confirm-final" disabled>
+            🚧 Próximamente: Confirmar e impactar stock
+          </button>
+        </div>
+
+        <div className="next-step-banner">
+          🚧 <strong>Próximo paso:</strong> el botón de confirmación final se va a habilitar cuando terminemos el endpoint que graba en DB y suma stock.
+        </div>
+
+        {pageStyles}
+      </div>
+    )
+  }
+
+  return null
+}
+
+// ============================================================
+// COMPONENTE: FILA DE MATCHING DE UN ITEM
+// ============================================================
+function MatchingRow({ item, onUpdate }: { item: EditedItem; onUpdate: (changes: Partial<EditedItem>) => void }) {
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<Suggestion[]>([])
+  const [searching, setSearching] = useState(false)
+
+  useEffect(() => {
+    if (!showSearch || searchQuery.trim().length < 2) {
+      setSearchResults([])
+      return
+    }
+    const timeout = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const params = new URLSearchParams({ q: searchQuery.trim() })
+        const res = await fetch(`/api/combos/search-skus?${params.toString()}`, { cache: 'no-store' })
+        const json = await res.json()
+        if (json.ok) {
+          setSearchResults((json.results ?? []).map((r: any) => ({
+            seller_sku: r.sku,
+            title: r.title,
+            thumbnail: r.thumbnail,
+            current_stock: r.minStock,
+            is_manual: !!r.is_manual,
+            match_type: 'manual' as any,
+            match_score: 0,
+          })))
+        }
+      } catch (err) {
+        console.error('Error buscando:', err)
+      } finally {
+        setSearching(false)
+      }
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [searchQuery, showSearch])
+
+  const handleSelectSuggestion = (s: Suggestion) => {
+    onUpdate({
+      selected_sku: s.seller_sku,
+      selected_title: s.title,
+      selected_is_manual: s.is_manual,
+      selected_current_stock: s.current_stock,
+      match_type: s.match_type as any,
+    })
+    setShowSearch(false)
+    setSearchQuery('')
+  }
+
+  const handleClearMatch = () => {
+    onUpdate({
+      selected_sku: null,
+      selected_title: null,
+      selected_is_manual: false,
+      selected_current_stock: 0,
+      match_type: null,
+    })
+  }
+
+  const matchTypeLabel = () => {
+    switch (item.match_type) {
+      case 'exact': return 'Coincidencia exacta'
+      case 'learned': return 'Aprendido de antes'
+      case 'contains': return 'Coincidencia parcial'
+      case 'manual': return 'Selección manual'
+      default: return ''
+    }
+  }
+
+  const matchTypeColor = () => {
+    switch (item.match_type) {
+      case 'exact':
+      case 'learned': return 'success'
+      case 'contains': return 'info'
+      case 'manual': return 'warning'
+      default: return 'danger'
+    }
+  }
+
+  return (
+    <div className={`match-row ${!item.selected_sku ? 'unmatched' : ''}`}>
+      {/* Lado izquierdo: lo que dice la factura */}
+      <div className="invoice-side">
+        <div className="invoice-label">Factura dice:</div>
+        <div className="invoice-code">{item.supplier_code ?? '(sin código)'}</div>
+        <div className="invoice-desc">{item.description ?? '—'}</div>
+        <div className="invoice-meta">
+          <span><strong>{item.quantity}</strong> unid.</span>
+          <span>·</span>
+          <span>{item.unit_cost != null ? new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(item.unit_cost) : '—'}</span>
+        </div>
+      </div>
+
+      {/* Flecha */}
+      <div className="arrow-divider">→</div>
+
+      {/* Lado derecho: SKU matcheado */}
+      <div className="match-side">
+        {item.selected_sku ? (
+          <>
+            <div className={`match-status status-${matchTypeColor()}`}>
+              {item.match_type === 'exact' || item.match_type === 'learned' ? '✅' : item.match_type === 'contains' ? '🔍' : '✋'} {matchTypeLabel()}
+            </div>
+            <div className="match-product">
+              <strong>{item.selected_sku}</strong>
+              {item.selected_is_manual && <span className="manual-tag">MANUAL</span>}
+            </div>
+            <div className="match-title">{item.selected_title}</div>
+            <div className="match-stock">Stock actual: <strong>{item.selected_current_stock}</strong></div>
+
+            <div className="match-actions">
+              <button className="btn-mini" onClick={() => setShowSearch(!showSearch)}>
+                {showSearch ? 'Cancelar' : 'Cambiar SKU'}
               </button>
-            </div>
-          </div>
-
-          {usage && (
-            <div className="cost-banner">
-              📊 Tokens usados: {usage.input_tokens.toLocaleString('es-AR')} input + {usage.output_tokens.toLocaleString('es-AR')} output
-              · Costo estimado: USD {estimatedCost.toFixed(4)}
-            </div>
-          )}
-
-          {/* Datos del proveedor */}
-          <div className="data-block">
-            <h3>Proveedor</h3>
-            <div className="data-grid">
-              <div className="data-item">
-                <span className="data-label">Nombre</span>
-                <span className="data-value">{result.supplier?.name ?? '—'}</span>
-              </div>
-              <div className="data-item">
-                <span className="data-label">CUIT</span>
-                <span className="data-value">{result.supplier?.cuit ?? '—'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Datos de la factura */}
-          <div className="data-block">
-            <h3>Factura</h3>
-            <div className="data-grid">
-              <div className="data-item">
-                <span className="data-label">Número</span>
-                <span className="data-value">{result.invoice?.number ?? '—'}</span>
-              </div>
-              <div className="data-item">
-                <span className="data-label">Fecha</span>
-                <span className="data-value">{result.invoice?.date ?? '—'}</span>
-              </div>
-              <div className="data-item">
-                <span className="data-label">Tipo</span>
-                <span className="data-value">{result.invoice?.type ?? '—'}</span>
-              </div>
-              <div className="data-item">
-                <span className="data-label">Total</span>
-                <span className="data-value">{formatARS(result.invoice?.total_amount ?? null)}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Items */}
-          <div className="data-block">
-            <h3>Productos ({result.items?.length ?? 0})</h3>
-            {!result.items || result.items.length === 0 ? (
-              <p className="empty-msg">No se detectaron productos en la factura.</p>
-            ) : (
-              <div className="items-table-wrap">
-                <table className="items-table">
-                  <thead>
-                    <tr>
-                      <th>Cód. proveedor</th>
-                      <th>Descripción</th>
-                      <th className="num">Cant.</th>
-                      <th className="num">Costo unit.</th>
-                      <th className="num">Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.items.map((item, idx) => (
-                      <tr key={idx}>
-                        <td>{item.supplier_code ?? '—'}</td>
-                        <td>{item.description ?? '—'}</td>
-                        <td className="num">{item.quantity ?? '—'}</td>
-                        <td className="num">{formatARS(item.unit_cost)}</td>
-                        <td className="num">{formatARS(item.subtotal)}</td>
-                      </tr>
+              {item.suggestions.length > 1 && (
+                <div className="other-suggestions">
+                  <span className="muted">Otras sugerencias:</span>
+                  {item.suggestions
+                    .filter(s => s.seller_sku !== item.selected_sku)
+                    .slice(0, 3)
+                    .map(s => (
+                      <button
+                        key={s.seller_sku}
+                        className="btn-suggestion"
+                        onClick={() => handleSelectSuggestion(s)}
+                        title={s.title}
+                      >
+                        {s.seller_sku}
+                      </button>
                     ))}
-                  </tbody>
-                </table>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="match-status status-danger">⚠️ Sin match automático</div>
+            <p className="no-match-text">No encontramos un SKU que coincida. Buscalo manualmente:</p>
+            <button className="btn-mini" onClick={() => setShowSearch(true)}>
+              🔍 Buscar SKU manualmente
+            </button>
+          </>
+        )}
+
+        {showSearch && (
+          <div className="search-box">
+            <input
+              type="text"
+              placeholder="Buscar por SKU o título..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="search-input-small"
+              autoFocus
+            />
+            {searchQuery.trim().length < 2 ? (
+              <div className="search-hint">Escribí al menos 2 caracteres...</div>
+            ) : searching ? (
+              <div className="search-hint">Buscando...</div>
+            ) : searchResults.length === 0 ? (
+              <div className="search-hint">Sin resultados</div>
+            ) : (
+              <div className="search-results">
+                {searchResults.map(r => (
+                  <button
+                    key={r.seller_sku}
+                    className="search-result"
+                    onClick={() => handleSelectSuggestion(r)}
+                  >
+                    {r.thumbnail
+                      ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" />
+                      : <div className="result-thumb-ph">{r.is_manual ? '📋' : '📦'}</div>
+                    }
+                    <div className="result-info">
+                      <div className="result-title">{r.title}</div>
+                      <div className="result-meta">{r.seller_sku} · Stock: {r.current_stock}</div>
+                    </div>
+                  </button>
+                ))}
               </div>
             )}
           </div>
+        )}
 
-          <div className="next-step-banner">
-            🚧 <strong>Próximamente:</strong> en este punto vas a poder matchear cada producto con tus SKUs, ajustar las cantidades y costos, y confirmar el ingreso para que se actualice el stock.
-          </div>
-        </div>
-      )}
-
-      <style jsx>{`
-        .page {
-          padding: 24px 40px 48px;
-          max-width: 1200px;
-          margin: 0 auto;
-        }
-        .header {
-          margin-bottom: 24px;
-        }
-        .back-link {
-          display: inline-block;
-          color: var(--text-muted);
-          text-decoration: none;
-          font-size: 13px;
-          margin-bottom: 8px;
-          transition: color 0.15s ease;
-        }
-        .back-link:hover { color: var(--accent); }
-        .header h1 {
-          margin: 0 0 4px;
-          font-size: 24px;
-          font-weight: 700;
-          color: var(--text-primary);
-        }
-        .subtitle {
-          margin: 0;
-          font-size: 13px;
-          color: var(--text-muted);
-        }
-
-        .upload-section { display: flex; justify-content: center; padding: 24px 0; }
-        .upload-card {
-          width: 100%;
-          max-width: 600px;
-          background: var(--bg-card);
-          border: 1px solid var(--border-subtle);
-          border-radius: 14px;
-          padding: 24px;
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-
-        .upload-zone {
-          background: var(--bg-elevated);
-          border: 2px dashed var(--border-medium);
-          border-radius: 12px;
-          padding: 32px;
-          text-align: center;
-          transition: all 0.15s ease;
-        }
-        .file-input { display: none; }
-        .upload-label {
-          cursor: pointer;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 12px;
-        }
-        .upload-icon { font-size: 48px; }
-        .upload-text {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-        .upload-text strong { font-size: 16px; color: var(--text-primary); }
-        .upload-text span { font-size: 12px; color: var(--text-muted); }
-
-        .file-preview {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          text-align: left;
-        }
-        .preview-img {
-          max-width: 80px;
-          max-height: 80px;
-          border-radius: 8px;
-          border: 1px solid var(--border-subtle);
-        }
-        .pdf-icon { font-size: 48px; }
-        .file-info {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          min-width: 0;
-        }
-        .file-info strong { font-size: 14px; color: var(--text-primary); word-break: break-all; }
-        .file-info span { font-size: 11px; color: var(--text-muted); }
-        .btn-change {
-          background: transparent;
-          color: var(--text-muted);
-          border: 1px solid var(--border-subtle);
-          padding: 6px 12px;
-          border-radius: 6px;
-          font-size: 12px;
-          cursor: pointer;
-          font-family: inherit;
-          flex-shrink: 0;
-        }
-        .btn-change:hover:not(:disabled) {
-          color: var(--text-primary);
-          border-color: var(--border-medium);
-        }
-
-        .btn-process {
-          background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%);
-          color: var(--bg-base);
-          border: none;
-          padding: 12px;
-          border-radius: 10px;
-          font-size: 14px;
-          font-weight: 600;
-          cursor: pointer;
-          font-family: inherit;
-          box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25);
-        }
-        .btn-process:hover:not(:disabled) {
-          transform: translateY(-1px);
-          box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4);
-        }
-        .btn-process:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .loading-msg {
-          font-size: 12px;
-          color: var(--text-muted);
-          text-align: center;
-          font-style: italic;
-        }
-
-        .error-banner {
-          background: rgba(255, 71, 87, 0.1);
-          border: 1px solid rgba(255, 71, 87, 0.3);
-          border-radius: 10px;
-          padding: 14px 18px;
-          color: var(--danger);
-          font-size: 13px;
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 12px;
-          margin-bottom: 16px;
-        }
-        .error-banner strong { font-weight: 600; }
-        .btn-retry {
-          margin-left: auto;
-          background: transparent;
-          color: var(--danger);
-          border: 1px solid rgba(255, 71, 87, 0.4);
-          padding: 6px 12px;
-          border-radius: 6px;
-          font-size: 12px;
-          cursor: pointer;
-          font-family: inherit;
-        }
-
-        .result-section { display: flex; flex-direction: column; gap: 18px; }
-        .result-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          flex-wrap: wrap;
-          gap: 12px;
-        }
-        .result-header h2 {
-          margin: 0;
-          font-size: 20px;
-          color: var(--text-primary);
-          font-weight: 700;
-        }
-        .btn-secondary {
-          background: transparent;
-          color: var(--text-secondary);
-          border: 1px solid var(--border-subtle);
-          padding: 9px 16px;
-          border-radius: 8px;
-          font-size: 13px;
-          cursor: pointer;
-          font-family: inherit;
-        }
-        .btn-secondary:hover {
-          color: var(--text-primary);
-          border-color: var(--border-medium);
-        }
-
-        .cost-banner {
-          background: var(--bg-elevated);
-          border: 1px solid var(--border-subtle);
-          border-radius: 8px;
-          padding: 10px 14px;
-          font-size: 12px;
-          color: var(--text-muted);
-        }
-
-        .data-block {
-          background: var(--bg-card);
-          border: 1px solid var(--border-subtle);
-          border-radius: 12px;
-          padding: 18px 20px;
-        }
-        .data-block h3 {
-          margin: 0 0 14px;
-          font-size: 13px;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          font-weight: 600;
-        }
-        .data-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 14px;
-        }
-        .data-item {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-        .data-label {
-          font-size: 11px;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 0.4px;
-          font-weight: 600;
-        }
-        .data-value {
-          font-size: 15px;
-          color: var(--text-primary);
-          font-weight: 500;
-        }
-
-        .empty-msg { color: var(--text-muted); font-size: 13px; margin: 0; }
-
-        .items-table-wrap { overflow-x: auto; }
-        .items-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 13px;
-        }
-        .items-table th {
-          background: var(--bg-elevated);
-          padding: 10px 14px;
-          text-align: left;
-          font-size: 11px;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          font-weight: 600;
-          border-bottom: 1px solid var(--border-subtle);
-        }
-        .items-table td {
-          padding: 10px 14px;
-          border-bottom: 1px solid var(--border-subtle);
-          color: var(--text-secondary);
-          vertical-align: top;
-        }
-        .items-table tr:last-child td { border-bottom: none; }
-        .items-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-
-        .next-step-banner {
-          background: rgba(255, 167, 38, 0.08);
-          border: 1px solid rgba(255, 167, 38, 0.25);
-          border-radius: 10px;
-          padding: 14px 18px;
-          font-size: 13px;
-          color: var(--text-secondary);
-        }
-        .next-step-banner strong { color: var(--warning); }
-
-        @media (max-width: 768px) {
-          .page { padding: 16px; }
-          .header h1 { font-size: 20px; }
-          .data-grid { grid-template-columns: 1fr; }
-        }
-      `}</style>
+        {item.selected_sku && (
+          <button className="btn-clear-match" onClick={handleClearMatch} title="Quitar match">
+            ✕
+          </button>
+        )}
+      </div>
     </div>
   )
 }
+
+// ============================================================
+// ESTILOS COMPARTIDOS
+// ============================================================
+const pageStyles = (
+  <style jsx>{`
+    .page { padding: 24px 40px 48px; max-width: 1200px; margin: 0 auto; }
+    .header { margin-bottom: 24px; }
+    .back-link { display: inline-block; color: var(--text-muted); text-decoration: none; font-size: 13px; margin-bottom: 8px; transition: color 0.15s ease; background: transparent; border: none; cursor: pointer; padding: 0; font-family: inherit; }
+    .back-link:hover { color: var(--accent); }
+    .header h1 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: var(--text-primary); }
+    .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+    /* === Pantalla 1: Upload === */
+    .upload-section { display: flex; justify-content: center; padding: 24px 0; }
+    .upload-card { width: 100%; max-width: 600px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+    .upload-zone { background: var(--bg-elevated); border: 2px dashed var(--border-medium); border-radius: 12px; padding: 32px; text-align: center; }
+    .file-input { display: none; }
+    .upload-label { cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .upload-icon { font-size: 48px; }
+    .upload-text { display: flex; flex-direction: column; gap: 4px; }
+    .upload-text strong { font-size: 16px; color: var(--text-primary); }
+    .upload-text span { font-size: 12px; color: var(--text-muted); }
+    .file-preview { display: flex; align-items: center; gap: 16px; text-align: left; }
+    .preview-img { max-width: 80px; max-height: 80px; border-radius: 8px; border: 1px solid var(--border-subtle); }
+    .pdf-icon { font-size: 48px; }
+    .file-info { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .file-info strong { font-size: 14px; color: var(--text-primary); word-break: break-all; }
+    .file-info span { font-size: 11px; color: var(--text-muted); }
+    .btn-change { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; flex-shrink: 0; }
+    .btn-process { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 12px 22px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); transition: all 0.15s ease; }
+    .btn-process:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4); }
+    .btn-process:disabled { opacity: 0.5; cursor: not-allowed; }
+    .loading-msg { font-size: 12px; color: var(--text-muted); text-align: center; font-style: italic; }
+
+    /* === Banners === */
+    .error-banner { background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 10px; padding: 14px 18px; color: var(--danger); font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .btn-retry { margin-left: auto; background: transparent; color: var(--danger); border: 1px solid rgba(255, 71, 87, 0.4); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
+    .confirm-banner { background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3); border-radius: 10px; padding: 14px 18px; font-size: 13px; color: var(--text-secondary); margin-bottom: 18px; }
+    .confirm-banner strong { color: var(--warning); }
+    .next-step-banner { background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.25); border-radius: 10px; padding: 14px 18px; font-size: 13px; color: var(--text-secondary); margin-top: 16px; }
+    .next-step-banner strong { color: var(--warning); }
+
+    /* === Pantalla 2: Matching === */
+    .summary-bar { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 18px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--text-secondary); }
+    .summary-bar strong { color: var(--text-primary); }
+    .status-tag { padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; }
+    .status-tag.success { background: rgba(62, 229, 224, 0.12); color: var(--accent); border: 1px solid var(--border-medium); }
+    .status-tag.warning { background: rgba(255, 167, 38, 0.12); color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.3); }
+
+    .matching-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; }
+    .match-row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 16px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px; align-items: stretch; }
+    .match-row.unmatched { border-color: rgba(255, 71, 87, 0.3); background: rgba(255, 71, 87, 0.04); }
+    .invoice-side, .match-side { display: flex; flex-direction: column; gap: 4px; min-width: 0; position: relative; }
+    .invoice-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .invoice-code { font-family: monospace; color: var(--text-primary); font-size: 14px; font-weight: 600; }
+    .invoice-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.4; }
+    .invoice-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+    .invoice-meta strong { color: var(--text-primary); }
+    .arrow-divider { display: flex; align-items: center; color: var(--text-muted); font-size: 18px; padding: 0 8px; }
+
+    .match-status { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; align-self: flex-start; margin-bottom: 4px; }
+    .status-success { background: rgba(62, 229, 224, 0.15); color: var(--accent); border: 1px solid var(--border-medium); }
+    .status-info { background: rgba(28, 160, 196, 0.15); color: var(--accent-secondary); border: 1px solid rgba(28, 160, 196, 0.3); }
+    .status-warning { background: rgba(255, 167, 38, 0.15); color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.3); }
+    .status-danger { background: rgba(255, 71, 87, 0.15); color: var(--danger); border: 1px solid rgba(255, 71, 87, 0.3); }
+
+    .match-product { font-family: monospace; font-size: 14px; color: var(--text-primary); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+    .manual-tag { background: rgba(62, 229, 224, 0.15); color: var(--accent); padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; border: 1px solid var(--border-medium); font-family: inherit; }
+    .match-title { font-size: 12px; color: var(--text-secondary); line-height: 1.3; }
+    .match-stock { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .match-stock strong { color: var(--text-primary); }
+    .no-match-text { font-size: 12px; color: var(--text-muted); margin: 4px 0 8px; }
+
+    .match-actions { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .other-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+    .muted { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+    .btn-mini { background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-subtle); padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-family: inherit; align-self: flex-start; }
+    .btn-mini:hover { border-color: var(--border-medium); color: var(--text-primary); }
+    .btn-suggestion { background: var(--bg-elevated); border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 3px 8px; border-radius: 5px; font-size: 10px; cursor: pointer; font-family: monospace; }
+    .btn-suggestion:hover { color: var(--accent); border-color: var(--accent); }
+    .btn-clear-match { position: absolute; top: 0; right: 0; background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 24px; height: 24px; border-radius: 6px; cursor: pointer; font-size: 11px; }
+    .btn-clear-match:hover { color: var(--danger); border-color: rgba(255, 71, 87, 0.4); }
+
+    .search-box { margin-top: 8px; background: var(--bg-elevated); border: 1px solid var(--border-medium); border-radius: 8px; padding: 10px; }
+    .search-input-small { width: 100%; padding: 8px 10px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-primary); font-family: inherit; outline: none; font-size: 12px; }
+    .search-input-small:focus { border-color: var(--accent); }
+    .search-hint { padding: 8px; text-align: center; color: var(--text-muted); font-size: 11px; }
+    .search-results { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; margin-top: 6px; }
+    .search-result { display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; cursor: pointer; text-align: left; font-family: inherit; }
+    .search-result:hover { border-color: var(--accent); }
+    .result-thumb { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border-subtle); flex-shrink: 0; }
+    .result-thumb-ph { width: 32px; height: 32px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+    .result-info { flex: 1; min-width: 0; }
+    .result-title { font-size: 11px; color: var(--text-primary); line-height: 1.2; margin-bottom: 2px; }
+    .result-meta { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+
+    .bottom-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+    .btn-secondary { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-subtle); padding: 11px 20px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .btn-secondary:hover { color: var(--text-primary); border-color: var(--border-medium); }
+
+    /* === Pantalla 3: Confirmación === */
+    .data-block { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+    .data-block h3 { margin: 0 0 14px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .data-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+    .data-item { display: flex; flex-direction: column; gap: 4px; }
+    .data-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+    .data-value { font-size: 15px; color: var(--text-primary); font-weight: 500; }
+
+    .items-table-wrap { overflow-x: auto; }
+    .items-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .items-table th { background: var(--bg-elevated); padding: 10px 14px; text-align: left; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; border-bottom: 1px solid var(--border-subtle); }
+    .items-table td { padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); vertical-align: top; }
+    .items-table tr:last-child td { border-bottom: none; }
+    .items-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .add-qty { color: var(--success); }
+    .new-stock { color: var(--accent); font-size: 14px; }
+
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+    .btn-confirm-final { background: var(--success); color: var(--bg-base); border: none; padding: 11px 22px; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }
+    .btn-confirm-final:disabled { opacity: 0.5; cursor: not-allowed; background: var(--bg-elevated); color: var(--text-muted); }
+
+    @media (max-width: 768px) {
+      .page { padding: 16px; }
+      .header h1 { font-size: 20px; }
+      .data-grid { grid-template-columns: 1fr; }
+      .match-row { grid-template-columns: 1fr; gap: 8px; }
+      .arrow-divider { display: none; }
+      .bottom-actions { flex-direction: column-reverse; }
+      .btn-secondary, .btn-process { width: 100%; }
+    }
+  `}</style>
+)
