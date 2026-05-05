@@ -7,6 +7,7 @@ export default function VentasLayout({ children }: { children: React.ReactNode }
   const pathname = usePathname()
   const tabs = [
     { href: '/ventas/hoy', label: 'Hoy', icon: '🟢' },
+    { href: '/ventas/ayer', label: 'Ayer', icon: '🌙' },
     { href: '/ventas/historicas', label: 'Históricas', icon: '📊' },
   ]
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/')
