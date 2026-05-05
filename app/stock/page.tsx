@@ -48,7 +48,7 @@ type SyncState = {
   total_items: number
 } | null
 
-type ApiResponse = {
+type StockApiResponse = {
   ok: boolean
   mode: 'flat' | 'grouped'
   items: Item[]
@@ -60,6 +60,53 @@ type ApiResponse = {
   archivedView: string
   kpis: Kpis
   sync_state: SyncState
+}
+
+type ComboComponent = {
+  component_sku: string
+  component_title: string
+  quantity: number
+  notes: string | null
+  component_stock: number
+  possible_combos: number
+  found: boolean
+}
+
+type ComboPublication = {
+  item_id: string
+  permalink: string | null
+  available_quantity: number
+  price: number
+  status: string
+}
+
+type Combo = {
+  sku: string
+  title: string
+  thumbnail: string | null
+  ml_stock: number
+  real_stock: number | null
+  total_sold: number
+  publications_count: number
+  currency: string
+  is_configured: boolean
+  components: ComboComponent[]
+  publications: ComboPublication[]
+}
+
+type CombosApiResponse = {
+  ok: boolean
+  combos: Combo[]
+  total: number
+  configured: number
+  unconfigured: number
+}
+
+type SkuSearchResult = {
+  sku: string
+  title: string
+  thumbnail: string | null
+  minStock: number
 }
 
 // ===== Helpers =====
@@ -109,7 +156,6 @@ function stockClass(qty: number): string {
   return ''
 }
 
-// Convierte items planos en "grupos" de un solo elemento (modo no agrupado)
 function itemsToFakeGroups(items: Item[]): Group[] {
   return items.map(item => ({
     key: item.item_id,
@@ -125,9 +171,74 @@ function itemsToFakeGroups(items: Item[]): Group[] {
   }))
 }
 
-// ===== Componente =====
+// ===== Componente principal =====
 export default function StockPage() {
-  const [data, setData] = useState<ApiResponse | null>(null)
+  // Tab activo: 'productos' | 'combos'
+  const [activeTab, setActiveTab] = useState<'productos' | 'combos'>('productos')
+
+  return (
+    <div className="stock-page">
+      {/* TABS */}
+      <div className="tabs-header">
+        <button
+          className={`tab ${activeTab === 'productos' ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('productos')}
+        >
+          Productos
+        </button>
+        <button
+          className={`tab ${activeTab === 'combos' ? 'tab-active' : ''}`}
+          onClick={() => setActiveTab('combos')}
+        >
+          Combos
+        </button>
+      </div>
+
+      {activeTab === 'productos' ? <ProductosView /> : <CombosView />}
+
+      <style jsx>{`
+        .stock-page {
+          padding: 24px 40px 48px;
+          max-width: 1400px;
+          margin: 0 auto;
+        }
+        .tabs-header {
+          display: flex;
+          gap: 4px;
+          border-bottom: 1px solid var(--border-subtle);
+          margin-bottom: 24px;
+        }
+        .tab {
+          background: transparent;
+          border: none;
+          padding: 12px 20px;
+          color: var(--text-muted);
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          border-bottom: 2px solid transparent;
+          margin-bottom: -1px;
+          transition: all 0.15s ease;
+        }
+        .tab:hover { color: var(--text-secondary); }
+        .tab.tab-active {
+          color: var(--accent);
+          border-bottom-color: var(--accent);
+        }
+        @media (max-width: 768px) {
+          .stock-page { padding: 16px; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+// ============================================================
+// VISTA: PRODUCTOS (la tabla agrupada por SKU que ya tenías)
+// ============================================================
+function ProductosView() {
+  const [data, setData] = useState<StockApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refrescando, setRefrescando] = useState(false)
   const [archivando, setArchivando] = useState(false)
@@ -161,7 +272,7 @@ export default function StockPage() {
     })
     try {
       const res = await fetch(`/api/stock/list?${params.toString()}`, { cache: 'no-store' })
-      const json: ApiResponse = await res.json()
+      const json: StockApiResponse = await res.json()
       setData(json)
     } catch (err) {
       console.error('Error fetch stock:', err)
@@ -183,8 +294,7 @@ export default function StockPage() {
     setRefrescando(true)
     try {
       const res = await fetch('/api/sync-items', { cache: 'no-store' })
-      const json = await res.json()
-      console.log('Sync result:', json)
+      await res.json()
       await fetchItems()
     } catch (err) {
       console.error('Error refrescando:', err)
@@ -261,12 +371,10 @@ export default function StockPage() {
   const totalFiltered = data?.totalFiltered ?? 0
   const totalGroups = data?.totalGroups ?? 0
 
-  // Determinar grupos a renderizar según el modo
   const groups: Group[] = data?.mode === 'grouped'
     ? (data?.groups ?? [])
     : itemsToFakeGroups(data?.items ?? [])
 
-  // Paginación
   const totalPages = data?.mode === 'grouped'
     ? Math.max(1, Math.ceil(totalGroups / pageSize))
     : Math.max(1, Math.ceil(totalFiltered / pageSize))
@@ -287,8 +395,7 @@ export default function StockPage() {
   }
 
   return (
-    <div className="stock-page">
-      {/* HEADER */}
+    <div className="productos-view">
       <div className="header">
         <div>
           <h1>{showArchived ? '🗄️ Stock archivado' : 'Stock'}</h1>
@@ -304,7 +411,6 @@ export default function StockPage() {
         </button>
       </div>
 
-      {/* KPIs */}
       <div className="kpis">
         <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
           <div className="kpi-label">Publicaciones</div>
@@ -324,7 +430,6 @@ export default function StockPage() {
         </div>
       </div>
 
-      {/* Toggles */}
       <div className="top-toggles">
         <label className="toggle">
           <input
@@ -344,7 +449,6 @@ export default function StockPage() {
         </label>
       </div>
 
-      {/* BARRA DE ACCIÓN */}
       {selected.size > 0 && (
         <div className="action-bar">
           <span className="action-text">
@@ -361,7 +465,6 @@ export default function StockPage() {
         </div>
       )}
 
-      {/* FILTROS */}
       <div className="filtros">
         <form onSubmit={handleSearchSubmit} className="search-form">
           <input
@@ -390,7 +493,6 @@ export default function StockPage() {
             <option value="paused">Pausadas</option>
             <option value="closed">Finalizadas</option>
           </select>
-
           <select value={logistic} onChange={(e) => setLogistic(e.target.value)}>
             <option value="all">Todo envío</option>
             <option value="flex">Flex (incluye coexistencia)</option>
@@ -400,14 +502,12 @@ export default function StockPage() {
             <option value="default">Sin Mercado Envíos</option>
             <option value="null">Sin envío</option>
           </select>
-
           <select value={stockFilter} onChange={(e) => setStockFilter(e.target.value)}>
             <option value="all">Todo stock</option>
             <option value="zero">Sin stock (0)</option>
             <option value="critical">Crítico (1-4)</option>
             <option value="normal">Normal (5+)</option>
           </select>
-
           <select value={sort} onChange={(e) => setSort(e.target.value)}>
             <option value="stock_desc">Más stock primero</option>
             <option value="stock_asc">Menos stock primero</option>
@@ -418,7 +518,6 @@ export default function StockPage() {
         </div>
       </div>
 
-      {/* CONTADOR */}
       <div className="counter">
         {loading
           ? 'Cargando...'
@@ -428,7 +527,6 @@ export default function StockPage() {
         }
       </div>
 
-      {/* TABLA (desktop) */}
       <div className="tabla-wrapper">
         <table className="tabla">
           <thead>
@@ -438,7 +536,6 @@ export default function StockPage() {
                   type="checkbox"
                   checked={todosEnPaginaSeleccionados}
                   onChange={selectAllInPage}
-                  aria-label="Seleccionar todos"
                 />
               </th>
               <th className="col-arrow"></th>
@@ -462,16 +559,9 @@ export default function StockPage() {
 
               if (!isMulti) {
                 return (
-                  <tr
-                    key={group.key}
-                    className={`${stockClass(single.available_quantity)} ${selected.has(single.item_id) ? 'fila-selected' : ''}`}
-                  >
+                  <tr key={group.key} className={`${stockClass(single.available_quantity)} ${selected.has(single.item_id) ? 'fila-selected' : ''}`}>
                     <td className="col-check">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(single.item_id)}
-                        onChange={() => toggleSelect(single.item_id)}
-                      />
+                      <input type="checkbox" checked={selected.has(single.item_id)} onChange={() => toggleSelect(single.item_id)} />
                     </td>
                     <td className="col-arrow"></td>
                     <td>
@@ -492,17 +582,13 @@ export default function StockPage() {
                     <td className="td-num">{formatearPrecio(single.price, single.currency)}</td>
                     <td>
                       <div className="logistic-badges">
-                        <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>
-                          {logisticLabel(single.logistic_type)}
-                        </span>
+                        <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
                         {single.is_flex && single.logistic_type !== 'self_service' && (
                           <span className="logistic-badge logistic-flex">⚡ Flex</span>
                         )}
                       </div>
                     </td>
-                    <td>
-                      <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
-                    </td>
+                    <td><span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span></td>
                     <td>
                       {single.permalink && (
                         <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
@@ -514,10 +600,7 @@ export default function StockPage() {
 
               return (
                 <>
-                  <tr
-                    key={group.key}
-                    className={`group-row ${stockClass(group.totalStock)} ${groupSelected ? 'fila-selected' : ''}`}
-                  >
+                  <tr key={group.key} className={`group-row ${stockClass(group.totalStock)} ${groupSelected ? 'fila-selected' : ''}`}>
                     <td className="col-check">
                       <input
                         type="checkbox"
@@ -527,11 +610,7 @@ export default function StockPage() {
                       />
                     </td>
                     <td className="col-arrow">
-                      <button
-                        className="arrow-btn"
-                        onClick={() => toggleExpand(group.key)}
-                        aria-label="Expandir"
-                      >
+                      <button className="arrow-btn" onClick={() => toggleExpand(group.key)}>
                         <span className={`arrow ${isExpanded ? 'arrow-open' : ''}`}>▶</span>
                       </button>
                     </td>
@@ -565,21 +644,12 @@ export default function StockPage() {
                     </td>
                   </tr>
                   {isExpanded && group.items.map((item) => (
-                    <tr
-                      key={item.item_id}
-                      className={`child-row ${stockClass(item.available_quantity)} ${selected.has(item.item_id) ? 'fila-selected' : ''}`}
-                    >
+                    <tr key={item.item_id} className={`child-row ${stockClass(item.available_quantity)} ${selected.has(item.item_id) ? 'fila-selected' : ''}`}>
                       <td className="col-check">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(item.item_id)}
-                          onChange={() => toggleSelect(item.item_id)}
-                        />
+                        <input type="checkbox" checked={selected.has(item.item_id)} onChange={() => toggleSelect(item.item_id)} />
                       </td>
                       <td className="col-arrow"></td>
-                      <td className="td-child-thumb">
-                        <span className="child-indent">└</span>
-                      </td>
+                      <td className="td-child-thumb"><span className="child-indent">└</span></td>
                       <td className="td-title">
                         <div className="title-text-child">{item.item_id}</div>
                         <div className="sku">{item.title}</div>
@@ -589,17 +659,13 @@ export default function StockPage() {
                       <td className="td-num">{formatearPrecio(item.price, item.currency)}</td>
                       <td>
                         <div className="logistic-badges">
-                          <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>
-                            {logisticLabel(item.logistic_type)}
-                          </span>
+                          <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>{logisticLabel(item.logistic_type)}</span>
                           {item.is_flex && item.logistic_type !== 'self_service' && (
                             <span className="logistic-badge logistic-flex">⚡ Flex</span>
                           )}
                         </div>
                       </td>
-                      <td>
-                        <span className={`status-badge status-${item.status}`}>{statusLabel(item.status)}</span>
-                      </td>
+                      <td><span className={`status-badge status-${item.status}`}>{statusLabel(item.status)}</span></td>
                       <td>
                         {item.permalink && (
                           <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
@@ -614,7 +680,7 @@ export default function StockPage() {
         </table>
       </div>
 
-      {/* CARDS (mobile) */}
+      {/* Cards mobile */}
       <div className="cards-mobile">
         {groups.map((group) => {
           const isMulti = group.items.length > 1
@@ -625,17 +691,9 @@ export default function StockPage() {
           if (!isMulti) {
             const isSelected = selected.has(single.item_id)
             return (
-              <div
-                key={group.key}
-                className={`card-item ${stockClass(single.available_quantity)} ${isSelected ? 'card-selected' : ''}`}
-              >
+              <div key={group.key} className={`card-item ${stockClass(single.available_quantity)} ${isSelected ? 'card-selected' : ''}`}>
                 <div className="card-top">
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => toggleSelect(single.item_id)}
-                    className="card-checkbox"
-                  />
+                  <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(single.item_id)} className="card-checkbox" />
                   {single.thumbnail
                     ? <img src={single.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
                     : <div className="thumb-placeholder">📦</div>
@@ -651,34 +709,19 @@ export default function StockPage() {
                   <div><span className="stat-label">Precio</span> {formatearPrecio(single.price, single.currency)}</div>
                 </div>
                 <div className="card-bottom">
-                  <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>
-                    {logisticLabel(single.logistic_type)}
-                  </span>
-                  {single.is_flex && single.logistic_type !== 'self_service' && (
-                    <span className="logistic-badge logistic-flex">⚡ Flex</span>
-                  )}
-                  {single.free_shipping && <span className="logistic-badge logistic-free">🆓</span>}
+                  <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
+                  {single.is_flex && single.logistic_type !== 'self_service' && <span className="logistic-badge logistic-flex">⚡ Flex</span>}
                   <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
-                  {single.permalink && (
-                    <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
-                  )}
+                  {single.permalink && <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
                 </div>
               </div>
             )
           }
 
           return (
-            <div
-              key={group.key}
-              className={`card-item card-group ${stockClass(group.totalStock)} ${groupSelected ? 'card-selected' : ''}`}
-            >
+            <div key={group.key} className={`card-item card-group ${stockClass(group.totalStock)} ${groupSelected ? 'card-selected' : ''}`}>
               <div className="card-top">
-                <input
-                  type="checkbox"
-                  checked={groupSelected}
-                  onChange={() => toggleSelectGroup(group)}
-                  className="card-checkbox"
-                />
+                <input type="checkbox" checked={groupSelected} onChange={() => toggleSelectGroup(group)} className="card-checkbox" />
                 {group.thumbnail
                   ? <img src={group.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
                   : <div className="thumb-placeholder">📦</div>
@@ -709,11 +752,7 @@ export default function StockPage() {
                 <div className="children-mobile">
                   {group.items.map(item => (
                     <div key={item.item_id} className="child-mobile">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(item.item_id)}
-                        onChange={() => toggleSelect(item.item_id)}
-                      />
+                      <input type="checkbox" checked={selected.has(item.item_id)} onChange={() => toggleSelect(item.item_id)} />
                       <div className="child-info">
                         <div className="child-id">{item.item_id}</div>
                         <div className="child-stats">
@@ -722,9 +761,7 @@ export default function StockPage() {
                           <span>{formatearPrecio(item.price, item.currency)}</span>
                         </div>
                       </div>
-                      {item.permalink && (
-                        <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
-                      )}
+                      {item.permalink && <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
                     </div>
                   ))}
                 </div>
@@ -734,7 +771,6 @@ export default function StockPage() {
         })}
       </div>
 
-      {/* PAGINACIÓN */}
       {totalPages > 1 && (
         <div className="paginacion">
           <button onClick={() => setPage(1)} disabled={page === 1}>«</button>
@@ -751,51 +787,29 @@ export default function StockPage() {
         </div>
       )}
 
-      <style>{`
-        .stock-page { padding: 32px 40px 48px; max-width: 1400px; margin: 0 auto; }
+      <style jsx>{`
         .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; }
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
-        .btn-refresh {
-          display: flex; align-items: center; gap: 8px;
-          background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%);
-          color: var(--bg-base); border: none; padding: 11px 18px; border-radius: 10px;
-          font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
-          box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); transition: all 0.15s ease; white-space: nowrap;
-        }
+        .btn-refresh { display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 11px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); transition: all 0.15s ease; white-space: nowrap; }
         .btn-refresh:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4); }
         .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
-
         .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
         .kpi { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden; }
         .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-c); opacity: 0.7; }
         .kpi-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
         .kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
-
         .top-toggles { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-        .toggle {
-          display: inline-flex; align-items: center; gap: 8px;
-          background: var(--bg-card); border: 1px solid var(--border-subtle);
-          padding: 8px 14px; border-radius: 10px; font-size: 13px;
-          color: var(--text-secondary); cursor: pointer; user-select: none;
-          transition: border-color 0.15s ease;
-        }
+        .toggle { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 8px 14px; border-radius: 10px; font-size: 13px; color: var(--text-secondary); cursor: pointer; user-select: none; transition: border-color 0.15s ease; }
         .toggle:hover { border-color: var(--border-medium); }
         .toggle input { cursor: pointer; accent-color: var(--accent); }
-
-        .action-bar {
-          display: flex; align-items: center; gap: 12px;
-          background: linear-gradient(135deg, rgba(62, 229, 224, 0.12) 0%, rgba(28, 160, 196, 0.08) 100%);
-          color: var(--text-primary); border: 1px solid var(--border-medium);
-          padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; flex-wrap: wrap;
-        }
+        .action-bar { display: flex; align-items: center; gap: 12px; background: linear-gradient(135deg, rgba(62, 229, 224, 0.12) 0%, rgba(28, 160, 196, 0.08) 100%); color: var(--text-primary); border: 1px solid var(--border-medium); padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; flex-wrap: wrap; }
         .action-text { flex: 1; font-size: 14px; }
         .btn-action { background: var(--warning); color: var(--bg-base); border: none; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
         .btn-action:hover:not(:disabled) { filter: brightness(1.1); }
         .btn-action:disabled { opacity: 0.6; cursor: not-allowed; }
         .btn-clear-sel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 8px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
         .btn-clear-sel:hover { color: var(--text-primary); border-color: var(--border-medium); }
-
         .filtros { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
         .search-form { display: flex; gap: 8px; }
         .search-input { flex: 1; padding: 10px 14px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; }
@@ -808,9 +822,7 @@ export default function StockPage() {
         .dropdowns select { padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; font-family: inherit; min-width: 150px; outline: none; }
         .dropdowns select:focus { border-color: var(--accent); }
         .dropdowns select option { background: var(--bg-elevated); color: var(--text-primary); }
-
         .counter { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
-
         .tabla-wrapper { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; overflow: hidden; overflow-x: auto; }
         .tabla { width: 100%; border-collapse: collapse; }
         .tabla th { background: var(--bg-elevated); padding: 12px 16px; text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; border-bottom: 1px solid var(--border-subtle); }
@@ -825,17 +837,14 @@ export default function StockPage() {
         .tabla tr.group-row:hover { background: var(--bg-card-hover); }
         .tabla tr.child-row { background: rgba(0, 0, 0, 0.18); font-size: 12px; }
         .tabla tr.child-row td { padding: 9px 16px; }
-
         .col-check { width: 36px; text-align: center; }
         .col-check input { cursor: pointer; transform: scale(1.2); accent-color: var(--accent); }
         .col-arrow { width: 32px; text-align: center; }
         .arrow-btn { background: transparent; border: none; cursor: pointer; color: var(--text-muted); font-size: 11px; padding: 4px 8px; }
         .arrow { display: inline-block; transition: transform 0.18s ease; }
         .arrow-open { transform: rotate(90deg); color: var(--accent); }
-
         .thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); }
         .thumb-placeholder { width: 44px; height: 44px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
-
         .td-title { max-width: 380px; }
         .title-text { font-weight: 500; color: var(--text-primary); line-height: 1.3; }
         .title-text-child { font-family: monospace; font-size: 12px; color: var(--accent); }
@@ -847,13 +856,10 @@ export default function StockPage() {
         .price-range small { color: var(--text-muted); margin: 0 2px; }
         .td-summary { color: var(--text-muted); font-size: 11px; font-style: italic; }
         .summary-text { opacity: 0.7; }
-
         .td-stock strong { font-size: 15px; color: var(--text-primary); }
         .td-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-
         .td-child-thumb { color: var(--text-dim); padding-left: 24px !important; }
         .child-indent { color: var(--text-dim); }
-
         .logistic-badges { display: flex; flex-wrap: wrap; gap: 4px; }
         .logistic-badge { display: inline-block; padding: 3px 8px; background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-subtle); border-radius: 6px; font-size: 11px; font-weight: 500; white-space: nowrap; }
         .logistic-flex, .logistic-self_service { background: rgba(255, 167, 38, 0.12); color: var(--warning); border-color: rgba(255, 167, 38, 0.3); }
@@ -861,43 +867,31 @@ export default function StockPage() {
         .logistic-cross_docking { background: rgba(28, 160, 196, 0.15); color: var(--accent-secondary); border-color: rgba(28, 160, 196, 0.3); }
         .logistic-drop_off { background: rgba(28, 160, 196, 0.1); color: var(--text-secondary); border-color: var(--border-subtle); }
         .logistic-free { background: rgba(62, 229, 224, 0.1); color: var(--accent); border-color: var(--border-medium); }
-
         .status-badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
         .status-active { background: rgba(62, 229, 224, 0.15); color: var(--accent); border: 1px solid var(--border-medium); }
         .status-paused { background: rgba(255, 167, 38, 0.15); color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.3); }
         .status-closed { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-subtle); }
         .status-under_review { background: rgba(28, 160, 196, 0.15); color: var(--accent-secondary); border: 1px solid rgba(28, 160, 196, 0.3); }
-
         .btn-ver { color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; white-space: nowrap; transition: opacity 0.15s ease; }
         .btn-ver:hover { opacity: 0.7; }
-
         .cards-mobile { display: none; }
-
         .paginacion { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 24px; }
         .paginacion button { background: var(--bg-card); border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; font-family: inherit; }
         .paginacion button:hover:not(:disabled) { background: var(--bg-card-hover); border-color: var(--border-medium); }
         .paginacion button:disabled { opacity: 0.4; cursor: not-allowed; }
         .paginacion span { font-size: 13px; color: var(--text-muted); padding: 0 12px; }
-
         .empty { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 48px; text-align: center; border-radius: 12px; color: var(--text-muted); margin-top: 16px; }
-
         @media (max-width: 768px) {
-          .stock-page { padding: 16px; }
           .header { flex-direction: column; align-items: stretch; gap: 12px; }
           .header h1 { font-size: 22px; }
           .btn-refresh { width: 100%; justify-content: center; }
-
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
-
           .top-toggles { flex-direction: column; }
           .toggle { justify-content: flex-start; }
-
           .action-bar { flex-direction: column; align-items: stretch; gap: 8px; }
           .action-bar > * { width: 100%; text-align: center; }
-
           .dropdowns select { flex: 1; min-width: 0; }
-
           .tabla-wrapper { display: none; }
           .cards-mobile { display: flex; flex-direction: column; gap: 12px; }
           .card-item { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 14px; border-radius: 12px; }
@@ -923,6 +917,569 @@ export default function StockPage() {
           .child-id { font-family: monospace; font-size: 11px; color: var(--accent); }
           .child-stats { font-size: 12px; color: var(--text-secondary); margin-top: 2px; display: flex; gap: 6px; }
         }
+      `}</style>
+    </div>
+  )
+}
+
+// ============================================================
+// VISTA: COMBOS
+// ============================================================
+function CombosView() {
+  const [data, setData] = useState<CombosApiResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [filterState, setFilterState] = useState<'all' | 'unconfigured' | 'configured' | 'with_stock' | 'without_stock'>('all')
+  const [sort, setSort] = useState<'stock_desc' | 'title_asc' | 'sold_desc'>('stock_desc')
+
+  const [editingCombo, setEditingCombo] = useState<Combo | null>(null)
+
+  const fetchCombos = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/combos/list', { cache: 'no-store' })
+      const json: CombosApiResponse = await res.json()
+      setData(json)
+    } catch (err) {
+      console.error('Error fetch combos:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchCombos() }, [fetchCombos])
+
+  const allCombos = data?.combos ?? []
+
+  // Filtros
+  const searchLower = search.trim().toLowerCase()
+  const filtered = allCombos.filter(c => {
+    if (searchLower && !c.title.toLowerCase().includes(searchLower) && !c.sku.toLowerCase().includes(searchLower)) return false
+    if (filterState === 'unconfigured' && c.is_configured) return false
+    if (filterState === 'configured' && !c.is_configured) return false
+    if (filterState === 'with_stock' && (!c.is_configured || (c.real_stock ?? 0) === 0)) return false
+    if (filterState === 'without_stock' && (c.real_stock ?? 0) > 0) return false
+    return true
+  })
+
+  // Sort
+  const sorted = [...filtered].sort((a, b) => {
+    if (sort === 'title_asc') return a.title.localeCompare(b.title, 'es', { sensitivity: 'base' })
+    if (sort === 'sold_desc') return b.total_sold - a.total_sold
+    // stock_desc por defecto: usa real si está configurado, sino ml_stock
+    const sa = a.is_configured ? (a.real_stock ?? 0) : a.ml_stock
+    const sb = b.is_configured ? (b.real_stock ?? 0) : b.ml_stock
+    return sb - sa
+  })
+
+  const total = data?.total ?? 0
+  const configured = data?.configured ?? 0
+  const unconfigured = data?.unconfigured ?? 0
+  const withStock = allCombos.filter(c => c.is_configured && (c.real_stock ?? 0) > 0).length
+
+  return (
+    <div className="combos-view">
+      <div className="header">
+        <div>
+          <h1>Combos</h1>
+          <p className="subtitle">Configurá los componentes de cada combo para calcular su stock real</p>
+        </div>
+      </div>
+
+      <div className="kpis">
+        <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
+          <div className="kpi-label">Total combos</div>
+          <div className="kpi-value">{total.toLocaleString('es-AR')}</div>
+        </div>
+        <div className="kpi" style={{ '--kpi-c': 'var(--success)' } as any}>
+          <div className="kpi-label">Configurados</div>
+          <div className="kpi-value">{configured.toLocaleString('es-AR')}</div>
+        </div>
+        <div className="kpi" style={{ '--kpi-c': 'var(--warning)' } as any}>
+          <div className="kpi-label">Sin configurar</div>
+          <div className="kpi-value">{unconfigured.toLocaleString('es-AR')}</div>
+        </div>
+        <div className="kpi" style={{ '--kpi-c': 'var(--accent)' } as any}>
+          <div className="kpi-label">Con stock real</div>
+          <div className="kpi-value">{withStock.toLocaleString('es-AR')}</div>
+        </div>
+      </div>
+
+      <div className="filtros">
+        <input
+          type="text"
+          className="search-input"
+          placeholder="Buscar combo por título o SKU..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+
+        <div className="dropdowns">
+          <select value={filterState} onChange={(e) => setFilterState(e.target.value as any)}>
+            <option value="all">Todos</option>
+            <option value="unconfigured">Sin configurar</option>
+            <option value="configured">Configurados</option>
+            <option value="with_stock">Configurados con stock</option>
+            <option value="without_stock">Configurados sin stock</option>
+          </select>
+
+          <select value={sort} onChange={(e) => setSort(e.target.value as any)}>
+            <option value="stock_desc">Más stock primero</option>
+            <option value="title_asc">Alfabético</option>
+            <option value="sold_desc">Más vendidos</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="counter">
+        {loading ? 'Cargando combos...' : `Mostrando ${sorted.length} de ${total} combos`}
+      </div>
+
+      {!loading && sorted.length === 0 && (
+        <div className="empty">
+          <p>No hay combos que coincidan con los filtros.</p>
+        </div>
+      )}
+
+      <div className="combos-grid">
+        {sorted.map(combo => (
+          <ComboCard key={combo.sku} combo={combo} onConfigure={() => setEditingCombo(combo)} />
+        ))}
+      </div>
+
+      {editingCombo && (
+        <ComboModal
+          combo={editingCombo}
+          onClose={() => setEditingCombo(null)}
+          onSaved={async () => {
+            setEditingCombo(null)
+            await fetchCombos()
+          }}
+        />
+      )}
+
+      <style jsx>{`
+        .combos-view { padding-bottom: 32px; }
+        .header { margin-bottom: 24px; }
+        .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
+        .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+        .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+        .kpi { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden; }
+        .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-c); opacity: 0.7; }
+        .kpi-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+        .kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+
+        .filtros { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
+        .search-input { padding: 10px 14px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; }
+        .search-input::placeholder { color: var(--text-muted); }
+        .search-input:focus { border-color: var(--accent); }
+        .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
+        .dropdowns select { padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; font-family: inherit; min-width: 200px; outline: none; }
+        .dropdowns select:focus { border-color: var(--accent); }
+
+        .counter { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; }
+
+        .combos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+
+        .empty { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 48px; text-align: center; border-radius: 12px; color: var(--text-muted); margin-top: 16px; }
+
+        @media (max-width: 768px) {
+          .kpis { grid-template-columns: repeat(2, 1fr); }
+          .kpi-value { font-size: 18px; }
+          .dropdowns select { flex: 1; min-width: 0; }
+          .combos-grid { grid-template-columns: 1fr; }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+// ============================================================
+// CARD DE UN COMBO
+// ============================================================
+function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => void }) {
+  const [showComponents, setShowComponents] = useState(false)
+  const stockToShow = combo.is_configured ? (combo.real_stock ?? 0) : combo.ml_stock
+  const stockColor = stockToShow === 0 ? 'danger' : stockToShow < 5 ? 'warning' : 'success'
+
+  return (
+    <div className={`combo-card ${combo.is_configured ? 'configured' : 'unconfigured'}`}>
+      <div className="combo-header">
+        {combo.thumbnail
+          ? <img src={combo.thumbnail.replace('http://', 'https://')} alt="" className="combo-thumb" />
+          : <div className="combo-thumb-placeholder">🎁</div>
+        }
+        <div className="combo-info">
+          <div className="combo-title">{combo.title}</div>
+          <div className="combo-sku">SKU: {combo.sku}</div>
+        </div>
+      </div>
+
+      <div className="combo-status">
+        {combo.is_configured ? (
+          <span className="badge-configured">✓ Configurado ({combo.components.length} componentes)</span>
+        ) : (
+          <span className="badge-unconfigured">⚠ Sin configurar</span>
+        )}
+      </div>
+
+      <div className="combo-stats">
+        <div className="stat">
+          <span className="stat-label">Stock ML</span>
+          <span className="stat-value">{combo.ml_stock}</span>
+        </div>
+        <div className="stat stat-real">
+          <span className="stat-label">Stock real</span>
+          <span className={`stat-value stat-${stockColor}`}>
+            {combo.is_configured ? combo.real_stock ?? 0 : '—'}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label">Vendidos</span>
+          <span className="stat-value">{combo.total_sold}</span>
+        </div>
+      </div>
+
+      {combo.is_configured && combo.components.length > 0 && (
+        <button className="btn-toggle-components" onClick={() => setShowComponents(!showComponents)}>
+          <span className={`arrow ${showComponents ? 'arrow-open' : ''}`}>▶</span>
+          {showComponents ? 'Ocultar componentes' : 'Ver componentes'}
+        </button>
+      )}
+
+      {showComponents && combo.is_configured && (
+        <div className="components-list">
+          {combo.components.map(c => (
+            <div key={c.component_sku} className={`component-item ${!c.found ? 'missing' : ''}`}>
+              <div className="component-info">
+                <div className="component-title">{c.component_title}</div>
+                <div className="component-sku">{c.component_sku} × {c.quantity}</div>
+              </div>
+              <div className="component-stock">
+                {c.found ? (
+                  <>
+                    <div className="cs-num">{c.component_stock}</div>
+                    <div className="cs-label">stock</div>
+                  </>
+                ) : (
+                  <div className="missing-label">No encontrado</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <button className="btn-configure" onClick={onConfigure}>
+        {combo.is_configured ? '✏️ Editar componentes' : '⚙️ Configurar combo'}
+      </button>
+
+      <style jsx>{`
+        .combo-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+        .combo-card.unconfigured { border-color: rgba(255, 167, 38, 0.25); }
+        .combo-card.configured { border-color: var(--border-medium); }
+        .combo-header { display: flex; gap: 12px; align-items: flex-start; }
+        .combo-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); flex-shrink: 0; }
+        .combo-thumb-placeholder { width: 56px; height: 56px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0; }
+        .combo-info { flex: 1; min-width: 0; }
+        .combo-title { font-weight: 500; color: var(--text-primary); font-size: 14px; line-height: 1.35; margin-bottom: 4px; }
+        .combo-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); word-break: break-all; }
+
+        .combo-status { display: flex; }
+        .badge-configured { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-medium); }
+        .badge-unconfigured { background: rgba(255, 167, 38, 0.12); color: var(--warning); padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 600; border: 1px solid rgba(255, 167, 38, 0.3); }
+
+        .combo-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+        .stat { display: flex; flex-direction: column; gap: 2px; }
+        .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+        .stat-value { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+        .stat-real { padding: 0 6px; border-left: 1px solid var(--border-subtle); border-right: 1px solid var(--border-subtle); }
+        .stat-success { color: var(--success); }
+        .stat-warning { color: var(--warning); }
+        .stat-danger { color: var(--danger); }
+
+        .btn-toggle-components { background: transparent; border: 1px dashed var(--border-subtle); color: var(--accent); padding: 8px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 8px; justify-content: center; }
+        .btn-toggle-components:hover { border-color: var(--accent); }
+        .arrow { display: inline-block; transition: transform 0.18s ease; font-size: 10px; }
+        .arrow-open { transform: rotate(90deg); }
+
+        .components-list { display: flex; flex-direction: column; gap: 6px; }
+        .component-item { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; gap: 10px; }
+        .component-item.missing { border-color: rgba(255, 71, 87, 0.3); }
+        .component-info { flex: 1; min-width: 0; }
+        .component-title { font-size: 12px; color: var(--text-primary); font-weight: 500; line-height: 1.2; margin-bottom: 2px; }
+        .component-sku { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+        .component-stock { text-align: right; min-width: 50px; }
+        .cs-num { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+        .cs-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+        .missing-label { font-size: 10px; color: var(--danger); font-weight: 500; }
+
+        .btn-configure { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; }
+        .btn-configure:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(62, 229, 224, 0.3); }
+      `}</style>
+    </div>
+  )
+}
+
+// ============================================================
+// MODAL DE CONFIGURACIÓN DE COMBO
+// ============================================================
+function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => void; onSaved: () => void }) {
+  type EditComponent = { component_sku: string; component_title: string; quantity: number }
+
+  const [components, setComponents] = useState<EditComponent[]>(
+    combo.components.map(c => ({
+      component_sku: c.component_sku,
+      component_title: c.component_title,
+      quantity: c.quantity,
+    }))
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SkuSearchResult[]>([])
+  const [searching, setSearching] = useState(false)
+
+  // Buscar SKUs
+  useEffect(() => {
+    if (!showSearch || searchQuery.trim().length < 2) {
+      setSearchResults([])
+      return
+    }
+    const timeout = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const params = new URLSearchParams({ q: searchQuery.trim(), exclude: combo.sku })
+        const res = await fetch(`/api/combos/search-skus?${params.toString()}`, { cache: 'no-store' })
+        const json = await res.json()
+        if (json.ok) setSearchResults(json.results)
+      } catch (err) {
+        console.error('Error buscando SKUs:', err)
+      } finally {
+        setSearching(false)
+      }
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [searchQuery, showSearch, combo.sku])
+
+  const addComponent = (sku: string, title: string) => {
+    if (components.some(c => c.component_sku === sku)) {
+      setError(`El componente ${sku} ya está agregado`)
+      return
+    }
+    setComponents([...components, { component_sku: sku, component_title: title, quantity: 1 }])
+    setShowSearch(false)
+    setSearchQuery('')
+    setSearchResults([])
+    setError(null)
+  }
+
+  const removeComponent = (sku: string) => {
+    setComponents(components.filter(c => c.component_sku !== sku))
+  }
+
+  const updateQuantity = (sku: string, quantity: number) => {
+    setComponents(components.map(c =>
+      c.component_sku === sku ? { ...c, quantity: Math.max(1, Math.floor(quantity)) } : c
+    ))
+  }
+
+  const handleSave = async () => {
+    setError(null)
+    setSaving(true)
+    try {
+      const res = await fetch('/api/combos/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent_sku: combo.sku,
+          components: components.map(c => ({ component_sku: c.component_sku, quantity: c.quantity })),
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) {
+        setError(json.error ?? 'Error desconocido')
+        return
+      }
+      onSaved()
+    } catch (err: any) {
+      setError(err?.message ?? 'Error de red')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">Configurar combo</div>
+            <div className="modal-subtitle">{combo.title}</div>
+            <div className="modal-sku">SKU: {combo.sku}</div>
+          </div>
+          <button className="btn-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          <div className="section-title">Productos que componen el combo</div>
+
+          {components.length === 0 && !showSearch && (
+            <div className="empty-components">
+              <p>Aún no hay componentes. Agregá los productos que forman parte de este combo.</p>
+            </div>
+          )}
+
+          <div className="components-edit-list">
+            {components.map(c => (
+              <div key={c.component_sku} className="component-edit-row">
+                <div className="component-edit-info">
+                  <div className="component-edit-title">{c.component_title}</div>
+                  <div className="component-edit-sku">{c.component_sku}</div>
+                </div>
+                <div className="qty-input-wrap">
+                  <span className="qty-label">Cantidad</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={c.quantity}
+                    onChange={(e) => updateQuantity(c.component_sku, parseInt(e.target.value) || 1)}
+                    className="qty-input"
+                  />
+                </div>
+                <button className="btn-remove-component" onClick={() => removeComponent(c.component_sku)}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {!showSearch && (
+            <button className="btn-add-component" onClick={() => setShowSearch(true)}>
+              + Agregar componente
+            </button>
+          )}
+
+          {showSearch && (
+            <div className="search-component-section">
+              <div className="search-header">
+                <input
+                  type="text"
+                  className="search-component-input"
+                  placeholder="Buscar por SKU o título..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoFocus
+                />
+                <button className="btn-cancel-search" onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchResults([]); }}>
+                  Cancelar
+                </button>
+              </div>
+              {searchQuery.trim().length < 2 ? (
+                <div className="search-hint">Escribí al menos 2 caracteres...</div>
+              ) : searching ? (
+                <div className="search-hint">Buscando...</div>
+              ) : searchResults.length === 0 ? (
+                <div className="search-hint">Sin resultados</div>
+              ) : (
+                <div className="search-results">
+                  {searchResults.map(r => {
+                    const alreadyAdded = components.some(c => c.component_sku === r.sku)
+                    return (
+                      <button
+                        key={r.sku}
+                        className={`search-result ${alreadyAdded ? 'already-added' : ''}`}
+                        onClick={() => !alreadyAdded && addComponent(r.sku, r.title)}
+                        disabled={alreadyAdded}
+                      >
+                        {r.thumbnail
+                          ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" />
+                          : <div className="result-thumb-ph">📦</div>
+                        }
+                        <div className="result-info">
+                          <div className="result-title">{r.title}</div>
+                          <div className="result-sku">SKU: {r.sku} · Stock: {r.minStock}</div>
+                        </div>
+                        {alreadyAdded && <span className="already-tag">Ya agregado</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="error-msg">{error}</div>
+        )}
+
+        <div className="modal-footer">
+          <button className="btn-cancel" onClick={onClose} disabled={saving}>Cancelar</button>
+          <button className="btn-save" onClick={handleSave} disabled={saving}>
+            {saving ? 'Guardando...' : '💾 Guardar combo'}
+          </button>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.15s ease; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 16px; max-width: 720px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+        .modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+        .modal-title { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600; }
+        .modal-subtitle { font-size: 17px; color: var(--text-primary); font-weight: 600; line-height: 1.3; margin-bottom: 4px; }
+        .modal-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); }
+        .btn-close { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 14px; flex-shrink: 0; }
+        .btn-close:hover { color: var(--text-primary); border-color: var(--border-medium); }
+
+        .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+        .section-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; font-weight: 600; }
+
+        .empty-components { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; background: var(--bg-elevated); border: 1px dashed var(--border-subtle); border-radius: 10px; }
+
+        .components-edit-list { display: flex; flex-direction: column; gap: 8px; }
+        .component-edit-row { display: flex; gap: 10px; align-items: center; background: var(--bg-elevated); border: 1px solid var(--border-subtle); padding: 10px 12px; border-radius: 10px; }
+        .component-edit-info { flex: 1; min-width: 0; }
+        .component-edit-title { font-size: 13px; color: var(--text-primary); font-weight: 500; line-height: 1.3; margin-bottom: 2px; }
+        .component-edit-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); }
+        .qty-input-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+        .qty-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+        .qty-input { width: 60px; padding: 6px 8px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-primary); text-align: center; font-family: inherit; outline: none; }
+        .qty-input:focus { border-color: var(--accent); }
+        .btn-remove-component { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 32px; height: 32px; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
+        .btn-remove-component:hover { color: var(--danger); border-color: rgba(255, 71, 87, 0.4); }
+
+        .btn-add-component { margin-top: 12px; width: 100%; background: transparent; border: 1px dashed var(--border-medium); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .btn-add-component:hover { background: rgba(62, 229, 224, 0.05); }
+
+        .search-component-section { margin-top: 12px; background: var(--bg-elevated); border: 1px solid var(--border-medium); border-radius: 10px; padding: 12px; }
+        .search-header { display: flex; gap: 8px; margin-bottom: 10px; }
+        .search-component-input { flex: 1; padding: 9px 12px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-primary); font-family: inherit; outline: none; }
+        .search-component-input:focus { border-color: var(--accent); }
+        .btn-cancel-search { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 9px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
+        .search-hint { padding: 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
+        .search-results { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+        .search-result { display: flex; gap: 10px; align-items: center; padding: 8px 10px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; cursor: pointer; text-align: left; font-family: inherit; }
+        .search-result:hover:not(:disabled) { border-color: var(--accent); }
+        .search-result.already-added { opacity: 0.5; cursor: not-allowed; }
+        .result-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-subtle); flex-shrink: 0; }
+        .result-thumb-ph { width: 36px; height: 36px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+        .result-info { flex: 1; min-width: 0; }
+        .result-title { font-size: 12px; color: var(--text-primary); line-height: 1.2; margin-bottom: 2px; }
+        .result-sku { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+        .already-tag { font-size: 10px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 6px; }
+
+        .error-msg { margin: 12px 24px 0; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
+
+        .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
+        .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
+        .btn-cancel:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
+        .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); }
+        .btn-save:hover:not(:disabled) { transform: translateY(-1px); }
+        .btn-save:disabled, .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
       `}</style>
     </div>
   )
