@@ -79,8 +79,6 @@ async function fetchShippingData(shippingId: string | number, token: string) {
   }
 }
 
-// Trae el logistic_type del shipment (Full = "fulfillment", Flex = "self_service",
-// Colecta = "cross_docking", Punto = "drop_off", etc).
 async function fetchShipmentInfo(shippingId: string | number, token: string) {
   try {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
@@ -119,6 +117,14 @@ function calcularComponentesPagos(payments: any[]) {
   return { comision, impuestos }
 }
 
+type OrderRow = {
+  order_id: number | string
+  total_amount: number
+  status: string
+  net_received: number | null
+  shipping_logistic_type: string | null
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const chunkSize = Math.min(200, Math.max(10, parseInt(searchParams.get('chunk') ?? '50', 10)))
@@ -143,29 +149,48 @@ export async function GET(request: Request) {
   const tokenRow = tokenData as TokenRow
   let token = tokenRow.access_token
 
-  // Contar cuántas órdenes con logistic_type NULL hay totales (para mostrar progreso)
+  // Conteo total de órdenes que todavía tienen shipping_logistic_type NULL
   const { count: pendingNullCount } = await supabase
     .from('orders')
     .select('order_id', { count: 'exact', head: true })
     .eq('status', 'paid')
     .is('shipping_logistic_type', null)
 
-  // Buscar órdenes que necesitan procesamiento:
-  // Caso A: financiero roto (net_received >= total_amount)
-  // Caso B: shipping_logistic_type NULL (columna nueva, todavía sin llenar)
-  const { data: ordersToFix } = await supabase
+  // === Query A: órdenes con shipping_logistic_type NULL (priorizar) ===
+  const { data: logisticNulls } = await supabase
     .from('orders')
     .select('order_id, total_amount, status, net_received, shipping_logistic_type')
     .eq('status', 'paid')
+    .is('shipping_logistic_type', null)
     .order('date_created', { ascending: false })
-    .limit(chunkSize * 3)
+    .limit(chunkSize)
 
-  const orders = (ordersToFix ?? [])
-    .filter(o =>
-      Number(o.net_received ?? 0) >= Number(o.total_amount ?? 0) ||
-      o.shipping_logistic_type === null
-    )
-    .slice(0, chunkSize)
+  // === Query B: órdenes con bug financiero (net_received >= total_amount) ===
+  // Solo si quedó cupo en chunkSize
+  const remainingSlots = chunkSize - (logisticNulls?.length ?? 0)
+  let financialBugs: OrderRow[] = []
+  if (remainingSlots > 0) {
+    const { data: financialRaw } = await supabase
+      .from('orders')
+      .select('order_id, total_amount, status, net_received, shipping_logistic_type')
+      .eq('status', 'paid')
+      .order('date_created', { ascending: false })
+      .limit(remainingSlots * 5)
+
+    financialBugs = (financialRaw ?? [])
+      .filter((o: any) => Number(o.net_received ?? 0) >= Number(o.total_amount ?? 0))
+      .slice(0, remainingSlots) as OrderRow[]
+  }
+
+  // Combinar y deduplicar por order_id
+  const ordersMap = new Map<string, OrderRow>()
+  ;(logisticNulls ?? []).forEach((o: any) => ordersMap.set(String(o.order_id), o as OrderRow))
+  financialBugs.forEach((o: any) => {
+    const key = String(o.order_id)
+    if (!ordersMap.has(key)) ordersMap.set(key, o as OrderRow)
+  })
+
+  const orders = Array.from(ordersMap.values())
 
   if (orders.length === 0) {
     return NextResponse.json({
@@ -177,7 +202,7 @@ export async function GET(request: Request) {
     })
   }
 
-  console.log(`[backfill] Procesando ${orders.length}... (NULL pendientes: ${pendingNullCount})`)
+  console.log(`[backfill] Procesando ${orders.length} (${logisticNulls?.length ?? 0} con NULL + ${financialBugs.length} con bug financiero). Total NULL pendientes: ${pendingNullCount}`)
 
   const firstCheck = await fetch(`https://api.mercadolibre.com/orders/${orders[0].order_id}`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -224,7 +249,7 @@ export async function GET(request: Request) {
         shippingLogisticType = info.logistic_type
       }
 
-      // Si la orden no tuvo shipping (caso raro), marcamos 'none' para que no se reintente
+      // Si no tiene shipping (raro), usamos 'none' para que no se reintente
       const finalLogisticType = orderDetail.shipping?.id
         ? (shippingLogisticType ?? 'unknown')
         : 'none'
@@ -243,7 +268,6 @@ export async function GET(request: Request) {
         const validMp = mpPayments.filter(Boolean)
 
         if (validMp.length === 0) {
-          // No hay payments pero igual updateamos logistic_type si lo necesitaba
           if (Object.keys(updateData).length === 0) {
             fetchErrors++
             return null
@@ -261,7 +285,6 @@ export async function GET(request: Request) {
       }
 
       if (Object.keys(updateData).length === 0) {
-        // Nada que actualizar, ignorar
         return null
       }
 
@@ -296,6 +319,6 @@ export async function GET(request: Request) {
     fetch_errors: fetchErrors,
     update_errors: updateErrors,
     done: false,
-    mensaje: `Procesadas ${processed}. Quedan ~${Math.max(0, (pendingNullCount ?? 0) - processed)} sin shipping_logistic_type. Volvé a llamar.`
+    mensaje: `Procesadas ${processed}. Quedan ~${Math.max(0, (pendingNullCount ?? 0) - processed)}. Volvé a llamar.`
   })
 }
