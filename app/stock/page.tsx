@@ -446,6 +446,10 @@ function ProductosView() {
           </p>
         </div>
         <div className="header-actions">
+          <button className="btn-ingresos" onClick={() => router.push('/stock/historial')}>
+            <span>📋</span>
+            <span>Historial</span>
+          </button>
           <button className="btn-ingresos" onClick={() => router.push('/stock/ingresos')}>
             <span>📦</span>
             <span>Cargar factura</span>
