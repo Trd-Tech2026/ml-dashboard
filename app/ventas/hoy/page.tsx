@@ -6,6 +6,8 @@ export const dynamic = 'force-dynamic'
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
+type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
+
 function inicioDiaArgentinaISO(): string {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
@@ -30,12 +32,13 @@ export default async function Hoy() {
     .select(`
       order_id, status, total_amount, currency, buyer_nickname,
       date_created, marketplace_fee, shipping_cost, discounts, net_received,
+      shipping_logistic_type,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', inicioDiaISO)
     .order('date_created', { ascending: false })
 
-  const ordenes: OrderWithItems[] = (ordenesRaw ?? []).map((o: any) => ({
+  const ordenes: OrderEnriched[] = (ordenesRaw ?? []).map((o: any) => ({
     order_id: o.order_id,
     status: o.status,
     total_amount: Number(o.total_amount ?? 0),
@@ -46,13 +49,24 @@ export default async function Hoy() {
     shipping_cost: Number(o.shipping_cost ?? 0),
     discounts: Number(o.discounts ?? 0),
     net_received: Number(o.net_received ?? 0),
+    shipping_logistic_type: o.shipping_logistic_type ?? null,
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
+  // === Cálculos generales ===
   const ventasPagadas = ordenes.filter(o => o.status === 'paid')
   const cancelaciones = ordenes.filter(o => o.status === 'cancelled')
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
+
+  // === Cálculos Full ===
+  const ordenesFull = ordenes.filter(o => o.shipping_logistic_type === 'fulfillment')
+  const ventasFullPagadas = ordenesFull.filter(o => o.status === 'paid')
+  const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
+  const ticketFull = ventasFullPagadas.length > 0 ? facturacionFull / ventasFullPagadas.length : 0
+  const porcentajeFull = ventasPagadas.length > 0
+    ? (ventasFullPagadas.length / ventasPagadas.length) * 100
+    : 0
 
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
@@ -67,6 +81,13 @@ export default async function Hoy() {
     { titulo: 'Facturación', valor: formatARS(facturacion), color: 'var(--info)' },
     { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: 'var(--warning)' },
     { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: 'var(--danger)' },
+  ]
+
+  const cardsFull = [
+    { titulo: 'Ventas Full pagadas', valor: String(ventasFullPagadas.length), color: 'var(--accent)' },
+    { titulo: 'Facturación Full', valor: formatARS(facturacionFull), color: 'var(--info)' },
+    { titulo: 'Ticket promedio Full', valor: formatARS(ticketFull), color: 'var(--warning)' },
+    { titulo: '% sobre ventas pagadas', valor: ventasPagadas.length === 0 ? '—' : `${porcentajeFull.toFixed(0)}%`, color: 'var(--success)' },
   ]
 
   return (
@@ -98,6 +119,33 @@ export default async function Hoy() {
         ) : (
           <VentasTabla ordenes={ordenes} mostrarHora={true} timeZone={TZ} />
         )}
+      </div>
+
+      {/* === SECCIÓN VENTAS FULL === */}
+      <div className="full-section">
+        <div className="full-header">
+          <h2>🏬 Ventas Full</h2>
+          <p>Ventas correspondientes a productos almacenados en Mercado Envíos Full (al momento de la venta)</p>
+        </div>
+
+        <div className="kpis">
+          {cardsFull.map((card) => (
+            <div key={card.titulo} className="kpi-card kpi-full" style={{ '--kpi-accent': card.color } as any}>
+              <p className="kpi-titulo">{card.titulo}</p>
+              <p className="kpi-valor">{card.valor}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="tabla-container">
+          <h2>Detalle Full ({ordenesFull.length} {ordenesFull.length === 1 ? 'venta' : 'ventas'})</h2>
+
+          {ordenesFull.length === 0 ? (
+            <p className="empty">No hay ventas Full hoy.</p>
+          ) : (
+            <VentasTabla ordenes={ordenesFull} mostrarHora={true} timeZone={TZ} />
+          )}
+        </div>
       </div>
 
       <style>{`
@@ -176,6 +224,29 @@ export default async function Hoy() {
           color: var(--text-muted);
         }
 
+        .full-section {
+          margin-top: 36px;
+          padding-top: 28px;
+          border-top: 1px solid var(--border-subtle);
+        }
+        .full-header {
+          margin-bottom: 20px;
+        }
+        .full-header h2 {
+          margin: 0 0 4px;
+          color: var(--text-primary);
+          font-size: 22px;
+          font-weight: 700;
+        }
+        .full-header p {
+          margin: 0;
+          color: var(--text-muted);
+          font-size: 13px;
+        }
+        .kpi-full {
+          background: linear-gradient(135deg, rgba(62, 229, 224, 0.04) 0%, rgba(28, 160, 196, 0.02) 100%);
+        }
+
         @media (max-width: 768px) {
           .page {
             padding: 16px;
@@ -210,6 +281,13 @@ export default async function Hoy() {
           }
           .tabla-container h2 {
             font-size: 15px;
+          }
+          .full-section {
+            margin-top: 24px;
+            padding-top: 20px;
+          }
+          .full-header h2 {
+            font-size: 18px;
           }
         }
       `}</style>

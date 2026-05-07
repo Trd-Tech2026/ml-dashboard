@@ -5,6 +5,8 @@ export const dynamic = 'force-dynamic'
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
+type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
+
 function rangoDiaArgentina(diasAtras: number): { desdeISO: string; hastaISO: string } {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
@@ -43,13 +45,14 @@ export default async function Ayer() {
     .select(`
       order_id, status, total_amount, currency, buyer_nickname,
       date_created, marketplace_fee, shipping_cost, discounts, net_received,
+      shipping_logistic_type,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', desdeISO)
     .lt('date_created', hastaISO)
     .order('date_created', { ascending: false })
 
-  const ordenes: OrderWithItems[] = (ordenesRaw ?? []).map((o: any) => ({
+  const ordenes: OrderEnriched[] = (ordenesRaw ?? []).map((o: any) => ({
     order_id: o.order_id,
     status: o.status,
     total_amount: Number(o.total_amount ?? 0),
@@ -60,24 +63,9 @@ export default async function Ayer() {
     shipping_cost: Number(o.shipping_cost ?? 0),
     discounts: Number(o.discounts ?? 0),
     net_received: Number(o.net_received ?? 0),
+    shipping_logistic_type: o.shipping_logistic_type ?? null,
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
-
-  // Traer logistic_type de cada item vendido para detectar cuáles son Full
-  const itemIds = Array.from(new Set(ordenes.flatMap(o => o.items.map(i => i.item_id)).filter(Boolean)))
-  const logisticMap = new Map<string, string | null>()
-  if (itemIds.length > 0) {
-    const { data: itemsData } = await supabase
-      .from('items')
-      .select('item_id, logistic_type')
-      .in('item_id', itemIds)
-    if (itemsData) {
-      itemsData.forEach((it: any) => logisticMap.set(it.item_id, it.logistic_type))
-    }
-  }
-
-  const esOrdenFull = (orden: OrderWithItems) =>
-    orden.items.some(it => logisticMap.get(it.item_id) === 'fulfillment')
 
   // === Cálculos generales ===
   const ventasPagadas = ordenes.filter(o => o.status === 'paid')
@@ -86,7 +74,7 @@ export default async function Ayer() {
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
   // === Cálculos Full ===
-  const ordenesFull = ordenes.filter(esOrdenFull)
+  const ordenesFull = ordenes.filter(o => o.shipping_logistic_type === 'fulfillment')
   const ventasFullPagadas = ordenesFull.filter(o => o.status === 'paid')
   const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketFull = ventasFullPagadas.length > 0 ? facturacionFull / ventasFullPagadas.length : 0
@@ -140,9 +128,7 @@ export default async function Ayer() {
         <h2>Detalle ({ordenes.length} {ordenes.length === 1 ? 'venta' : 'ventas'})</h2>
 
         {ordenes.length === 0 ? (
-          <p className="empty">
-            No hubo ventas ayer.
-          </p>
+          <p className="empty">No hubo ventas ayer.</p>
         ) : (
           <VentasTabla ordenes={ordenes} mostrarHora={true} timeZone={TZ} />
         )}
@@ -152,7 +138,7 @@ export default async function Ayer() {
       <div className="full-section">
         <div className="full-header">
           <h2>🏬 Ventas Full</h2>
-          <p>Ventas correspondientes a productos almacenados en Mercado Envíos Full</p>
+          <p>Ventas correspondientes a productos almacenados en Mercado Envíos Full (al momento de la venta)</p>
         </div>
 
         <div className="kpis">
@@ -168,9 +154,7 @@ export default async function Ayer() {
           <h2>Detalle Full ({ordenesFull.length} {ordenesFull.length === 1 ? 'venta' : 'ventas'})</h2>
 
           {ordenesFull.length === 0 ? (
-            <p className="empty">
-              No hubo ventas Full ayer.
-            </p>
+            <p className="empty">No hubo ventas Full ayer.</p>
           ) : (
             <VentasTabla ordenes={ordenesFull} mostrarHora={true} timeZone={TZ} />
           )}

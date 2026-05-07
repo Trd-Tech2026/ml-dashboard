@@ -4,6 +4,8 @@ import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
 
 export const dynamic = 'force-dynamic'
 
+type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
+
 type Props = {
   searchParams: Promise<{ rango?: string }>
 }
@@ -22,18 +24,19 @@ export default async function Historicas({ searchParams }: Props) {
   desde.setDate(desde.getDate() - dias)
   const desdeISO = desde.toISOString()
 
-  const todasOrdenes: { status: string; total_amount: number }[] = []
+  // Trae todas (paginadas) con status, total y logistic_type para los KPIs
+  const todasOrdenes: { status: string; total_amount: number; shipping_logistic_type: string | null }[] = []
   let from = 0
   const PAGE_SIZE = 1000
   while (true) {
     const { data, error } = await supabase
       .from('orders')
-      .select('status, total_amount')
+      .select('status, total_amount, shipping_logistic_type')
       .gte('date_created', desdeISO)
       .range(from, from + PAGE_SIZE - 1)
 
     if (error || !data || data.length === 0) break
-    todasOrdenes.push(...(data as { status: string; total_amount: number }[]))
+    todasOrdenes.push(...(data as { status: string; total_amount: number; shipping_logistic_type: string | null }[]))
     if (data.length < PAGE_SIZE) break
     from += PAGE_SIZE
   }
@@ -43,6 +46,16 @@ export default async function Historicas({ searchParams }: Props) {
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
+  // === Cálculos Full ===
+  const todasFull = todasOrdenes.filter(o => o.shipping_logistic_type === 'fulfillment')
+  const ventasFullPagadas = todasFull.filter(o => o.status === 'paid')
+  const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
+  const ticketFull = ventasFullPagadas.length > 0 ? facturacionFull / ventasFullPagadas.length : 0
+  const porcentajeFull = ventasPagadas.length > 0
+    ? (ventasFullPagadas.length / ventasPagadas.length) * 100
+    : 0
+
+  // Última 100 órdenes del período (todas)
   const { data: recientesRaw } = await supabase
     .from('orders')
     .select(`
@@ -56,6 +69,7 @@ export default async function Historicas({ searchParams }: Props) {
       shipping_cost,
       discounts,
       net_received,
+      shipping_logistic_type,
       order_items (
         item_id,
         title,
@@ -67,7 +81,7 @@ export default async function Historicas({ searchParams }: Props) {
     .order('date_created', { ascending: false })
     .limit(100)
 
-  const ordenes: OrderWithItems[] = (recientesRaw ?? []).map((o: any) => ({
+  const ordenes: OrderEnriched[] = (recientesRaw ?? []).map((o: any) => ({
     order_id: o.order_id,
     status: o.status,
     total_amount: Number(o.total_amount ?? 0),
@@ -78,6 +92,49 @@ export default async function Historicas({ searchParams }: Props) {
     shipping_cost: Number(o.shipping_cost ?? 0),
     discounts: Number(o.discounts ?? 0),
     net_received: Number(o.net_received ?? 0),
+    shipping_logistic_type: o.shipping_logistic_type ?? null,
+    items: Array.isArray(o.order_items) ? o.order_items : [],
+  }))
+
+  // Últimas 100 órdenes Full del período (query separada para no estar limitado a las 100 globales)
+  const { data: recientesFullRaw } = await supabase
+    .from('orders')
+    .select(`
+      order_id,
+      status,
+      total_amount,
+      currency,
+      buyer_nickname,
+      date_created,
+      marketplace_fee,
+      shipping_cost,
+      discounts,
+      net_received,
+      shipping_logistic_type,
+      order_items (
+        item_id,
+        title,
+        quantity,
+        unit_price
+      )
+    `)
+    .gte('date_created', desdeISO)
+    .eq('shipping_logistic_type', 'fulfillment')
+    .order('date_created', { ascending: false })
+    .limit(100)
+
+  const ordenesFullTabla: OrderEnriched[] = (recientesFullRaw ?? []).map((o: any) => ({
+    order_id: o.order_id,
+    status: o.status,
+    total_amount: Number(o.total_amount ?? 0),
+    currency: o.currency,
+    buyer_nickname: o.buyer_nickname,
+    date_created: o.date_created,
+    marketplace_fee: Number(o.marketplace_fee ?? 0),
+    shipping_cost: Number(o.shipping_cost ?? 0),
+    discounts: Number(o.discounts ?? 0),
+    net_received: Number(o.net_received ?? 0),
+    shipping_logistic_type: o.shipping_logistic_type ?? null,
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
@@ -95,6 +152,13 @@ export default async function Historicas({ searchParams }: Props) {
     { titulo: 'Facturación', valor: formatARS(facturacion), kpiClass: 'kpi-info' },
     { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), kpiClass: 'kpi-warning' },
     { titulo: 'Cancelaciones', valor: String(cancelaciones.length), kpiClass: 'kpi-danger' },
+  ]
+
+  const cardsFull = [
+    { titulo: 'Ventas Full pagadas', valor: String(ventasFullPagadas.length), kpiClass: 'kpi-accent' },
+    { titulo: 'Facturación Full', valor: formatARS(facturacionFull), kpiClass: 'kpi-info' },
+    { titulo: 'Ticket promedio Full', valor: formatARS(ticketFull), kpiClass: 'kpi-warning' },
+    { titulo: '% sobre ventas pagadas', valor: ventasPagadas.length === 0 ? '—' : `${porcentajeFull.toFixed(0)}%`, kpiClass: 'kpi-success' },
   ]
 
   return (
@@ -138,6 +202,34 @@ export default async function Historicas({ searchParams }: Props) {
         ) : (
           <VentasTabla ordenes={ordenes} mostrarHora={false} />
         )}
+      </div>
+
+      {/* === SECCIÓN VENTAS FULL === */}
+      <div className="full-section">
+        <div className="full-header">
+          <h2>🏬 Ventas Full</h2>
+          <p>Ventas correspondientes a productos almacenados en Mercado Envíos Full (al momento de la venta)</p>
+        </div>
+
+        <div className="kpis">
+          {cardsFull.map((card) => (
+            <div key={card.titulo} className={`kpi-card kpi-full ${card.kpiClass}`}>
+              <p className="kpi-titulo">{card.titulo}</p>
+              <p className="kpi-valor">{card.valor}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="tabla-container">
+          <h2>Últimas 100 ventas Full del período</h2>
+          <p className="total-info">Total Full en el período: {todasFull.length.toLocaleString('es-AR')}</p>
+
+          {ordenesFullTabla.length === 0 ? (
+            <p className="empty">No hay ventas Full en este período.</p>
+          ) : (
+            <VentasTabla ordenes={ordenesFullTabla} mostrarHora={false} />
+          )}
+        </div>
       </div>
 
       <style>{`
@@ -218,6 +310,7 @@ export default async function Historicas({ searchParams }: Props) {
         .kpi-info::before { background: var(--info); }
         .kpi-warning::before { background: var(--warning); }
         .kpi-danger::before { background: var(--danger); }
+        .kpi-accent::before { background: var(--accent); }
         .kpi-titulo {
           color: var(--text-muted);
           font-size: 11px;
@@ -254,6 +347,29 @@ export default async function Historicas({ searchParams }: Props) {
         .empty {
           color: var(--text-muted);
           font-size: 13px;
+        }
+
+        .full-section {
+          margin-top: 36px;
+          padding-top: 28px;
+          border-top: 1px solid var(--border-subtle);
+        }
+        .full-header {
+          margin-bottom: 20px;
+        }
+        .full-header h2 {
+          margin: 0 0 4px;
+          color: var(--text-primary);
+          font-size: 22px;
+          font-weight: 700;
+        }
+        .full-header p {
+          margin: 0;
+          color: var(--text-muted);
+          font-size: 13px;
+        }
+        .kpi-full {
+          background: linear-gradient(135deg, rgba(62, 229, 224, 0.04) 0%, rgba(28, 160, 196, 0.02) 100%);
         }
 
         @media (max-width: 768px) {
@@ -306,6 +422,13 @@ export default async function Historicas({ searchParams }: Props) {
           }
           .total-info {
             font-size: 11px;
+          }
+          .full-section {
+            margin-top: 24px;
+            padding-top: 20px;
+          }
+          .full-header h2 {
+            font-size: 18px;
           }
         }
       `}</style>
