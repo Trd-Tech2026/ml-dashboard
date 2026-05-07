@@ -81,6 +81,23 @@ async function fetchShippingData(shippingId: string | number, token: string) {
   }
 }
 
+// NUEVO: trae el logistic_type del shipment (Full = "fulfillment", Flex = "self_service",
+// Colecta = "cross_docking", etc). Es la información congelada al momento de la venta.
+async function fetchShipmentInfo(shippingId: string | number, token: string) {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return { logistic_type: null as string | null }
+    const data = await res.json()
+    return {
+      logistic_type: (data?.logistic_type ?? null) as string | null
+    }
+  } catch {
+    return { logistic_type: null as string | null }
+  }
+}
+
 // Calcula los componentes financieros sumando todos los charges_details de TODOS los payments
 function calcularComponentesPagos(payments: any[]) {
   let comision = 0
@@ -208,7 +225,7 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // Para cada orden: traer payments MP + datos de envío
+    // Para cada orden: traer payments MP + datos de envío + logistic_type
     const ordersConFinanzas = await Promise.all(results.map(async (order: any) => {
       const total = Number(order.total_amount ?? 0)
 
@@ -219,13 +236,18 @@ export async function GET() {
       )
       const validMp = mpPayments.filter(Boolean)
 
-      // 2. Traer datos de envío
+      // 2. Traer datos de envío (costos) Y tipo logístico EN PARALELO
       let costoSeller = 0
       let bonificacion = 0
+      let shippingLogisticType: string | null = null
       if (order.shipping?.id) {
-        const ship = await fetchShippingData(order.shipping.id, token)
+        const [ship, info] = await Promise.all([
+          fetchShippingData(order.shipping.id, token),
+          fetchShipmentInfo(order.shipping.id, token),
+        ])
         costoSeller = ship.costoSeller
         bonificacion = ship.bonificacion
+        shippingLogisticType = info.logistic_type
       }
 
       // 3. Calcular componentes
@@ -243,10 +265,11 @@ export async function GET() {
         shipping_cost: costoSeller,
         discounts: bonificacion,
         net_received,
+        shipping_logistic_type: shippingLogisticType,
       }
     }))
 
-    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, net_received }) => ({
+    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, net_received, shipping_logistic_type }) => ({
       order_id: order.id,
       status: order.status,
       total_amount: Number(order.total_amount ?? 0),
@@ -260,6 +283,7 @@ export async function GET() {
       shipping_cost,
       discounts,
       net_received,
+      shipping_logistic_type,
     }))
 
     const itemsToInsert = results.flatMap((order: any) =>
