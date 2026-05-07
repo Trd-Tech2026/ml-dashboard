@@ -29,7 +29,7 @@ type MatchedItem = {
   best_match: Suggestion | null
 }
 
-type Step = 'upload' | 'matching' | 'confirm'
+type Step = 'upload' | 'matching' | 'confirm' | 'success'
 
 type EditedItem = {
   index: number
@@ -43,6 +43,15 @@ type EditedItem = {
   selected_current_stock: number
   match_type: 'exact' | 'contains' | 'learned' | 'manual' | null
   suggestions: Suggestion[]
+}
+
+type ConfirmResult = {
+  ok: boolean
+  purchase_order_id?: number
+  total_items?: number
+  succeeded?: number
+  failed?: number
+  results?: Array<{ sku: string; before: number; after: number; success: boolean; error?: string }>
 }
 
 export default function IngresosPage() {
@@ -59,6 +68,9 @@ export default function IngresosPage() {
   const [filePath, setFilePath] = useState<string | null>(null)
   const [usage, setUsage] = useState<{ input_tokens: number; output_tokens: number } | null>(null)
   const [matchedItems, setMatchedItems] = useState<EditedItem[]>([])
+
+  const [confirmResult, setConfirmResult] = useState<ConfirmResult | null>(null)
+  const [confirming, setConfirming] = useState(false)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
@@ -140,6 +152,55 @@ export default function IngresosPage() {
     }
   }
 
+  const handleConfirm = async () => {
+    if (!extracted) return
+
+    const confirmed = window.confirm(
+      `Vas a sumar stock a ${matchedItems.length} producto(s).\n\nEsta accion no se puede deshacer automaticamente. Continuar?`
+    )
+    if (!confirmed) return
+
+    setConfirming(true)
+    setError(null)
+
+    try {
+      const body = {
+        supplier: extracted.supplier,
+        invoice: extracted.invoice,
+        items: matchedItems.map(item => ({
+          supplier_code: item.supplier_code,
+          description: item.description,
+          quantity: item.quantity,
+          unit_cost: item.unit_cost,
+          seller_sku: item.selected_sku!,
+          is_manual: item.selected_is_manual,
+        })),
+        file_path: filePath,
+        ai_extracted_data: extracted,
+      }
+
+      const res = await fetch('/api/purchases/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json: ConfirmResult = await res.json()
+
+      if (!json.ok) {
+        setError((json as any).error ?? 'Error al confirmar')
+        setConfirming(false)
+        return
+      }
+
+      setConfirmResult(json)
+      setStep('success')
+    } catch (err: any) {
+      setError(err?.message ?? 'Error de red')
+    } finally {
+      setConfirming(false)
+    }
+  }
+
   const handleReset = () => {
     setFile(null)
     setPreview(null)
@@ -148,6 +209,7 @@ export default function IngresosPage() {
     setUsage(null)
     setMatchedItems([])
     setError(null)
+    setConfirmResult(null)
     setStep('upload')
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -266,7 +328,7 @@ export default function IngresosPage() {
           </div>
 
           <div className="confirm-banner">
-            ⚠️ <strong>Importante:</strong> al confirmar se va a sumar el stock en tu dashboard. Esta acción NO se puede deshacer (aunque podés ajustar manualmente después).
+            ⚠️ <strong>Importante:</strong> al confirmar se va a sumar el stock en tu dashboard. Esta acción NO se puede deshacer (aunque podés ajustar manualmente después). Por ahora <strong>NO se sincroniza con Mercado Libre</strong>.
           </div>
 
           <div className="data-block">
@@ -327,12 +389,62 @@ export default function IngresosPage() {
           </div>
 
           <div className="confirm-actions">
-            <button className="btn-secondary" onClick={() => setStep('matching')}>← Volver a editar</button>
-            <button className="btn-confirm-final" disabled>🚧 Próximamente: Confirmar e impactar stock</button>
+            <button className="btn-secondary" onClick={() => setStep('matching')} disabled={confirming}>← Volver a editar</button>
+            <button className="btn-confirm-final" onClick={handleConfirm} disabled={confirming}>
+              {confirming ? '⏳ Procesando...' : '✅ Confirmar e impactar stock'}
+            </button>
+          </div>
+        </>
+      )}
+
+      {step === 'success' && confirmResult && (
+        <>
+          <div className="header">
+            <h1>🎉 Ingreso confirmado</h1>
+            <p className="subtitle">El stock fue actualizado correctamente</p>
           </div>
 
-          <div className="next-step-banner">
-            🚧 <strong>Próximo paso:</strong> el botón de confirmación final se va a habilitar cuando terminemos el endpoint que graba en DB y suma stock.
+          <div className="success-banner">
+            ✅ <strong>Operación exitosa.</strong> Se actualizó el stock de {confirmResult.succeeded} producto{confirmResult.succeeded === 1 ? '' : 's'}.
+            {confirmResult.failed && confirmResult.failed > 0 && (
+              <> {confirmResult.failed} fallaron — revisalos abajo.</>
+            )}
+          </div>
+
+          <div className="data-block">
+            <h3>Resumen</h3>
+            <div className="items-table-wrap">
+              <table className="items-table">
+                <thead>
+                  <tr>
+                    <th>SKU</th>
+                    <th className="num">Stock anterior</th>
+                    <th className="num">Stock nuevo</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(confirmResult.results ?? []).map((r, idx) => (
+                    <tr key={idx}>
+                      <td><strong>{r.sku}</strong></td>
+                      <td className="num">{r.before}</td>
+                      <td className="num"><strong className={r.success ? 'new-stock' : ''}>{r.after}</strong></td>
+                      <td>
+                        {r.success
+                          ? <span className="success-tag">✓ OK</span>
+                          : <span className="error-tag" title={r.error}>✗ Error</span>
+                        }
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="success-actions">
+            <button className="btn-secondary" onClick={handleReset}>📦 Cargar otra factura</button>
+            <button className="btn-process" onClick={() => router.push('/stock')}>← Volver a Stock</button>
           </div>
         </>
       )}
@@ -377,8 +489,8 @@ export default function IngresosPage() {
         .btn-retry { margin-left: auto; background: transparent; color: var(--danger); border: 1px solid rgba(255, 71, 87, 0.4); padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: inherit; }
         .confirm-banner { background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3); border-radius: 10px; padding: 14px 18px; font-size: 13px; color: var(--text-secondary); margin-bottom: 18px; }
         .confirm-banner strong { color: var(--warning); }
-        .next-step-banner { background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.25); border-radius: 10px; padding: 14px 18px; font-size: 13px; color: var(--text-secondary); margin-top: 16px; }
-        .next-step-banner strong { color: var(--warning); }
+        .success-banner { background: rgba(62, 229, 224, 0.08); border: 1px solid var(--border-medium); border-radius: 10px; padding: 16px 20px; font-size: 14px; color: var(--text-secondary); margin-bottom: 18px; }
+        .success-banner strong { color: var(--accent); }
 
         .summary-bar { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 18px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--text-secondary); }
         .summary-bar strong { color: var(--text-primary); }
@@ -390,7 +502,8 @@ export default function IngresosPage() {
 
         .bottom-actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
         .btn-secondary { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-subtle); padding: 11px 20px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
-        .btn-secondary:hover { color: var(--text-primary); border-color: var(--border-medium); }
+        .btn-secondary:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
+        .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .data-block { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
         .data-block h3 { margin: 0 0 14px; font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
@@ -408,17 +521,20 @@ export default function IngresosPage() {
         .items-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
         .add-qty { color: var(--success); }
         .new-stock { color: var(--accent); font-size: 14px; }
+        .success-tag { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-medium); }
+        .error-tag { background: rgba(255, 71, 87, 0.12); color: var(--danger); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid rgba(255, 71, 87, 0.3); cursor: help; }
 
-        .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
-        .btn-confirm-final { background: var(--success); color: var(--bg-base); border: none; padding: 11px 22px; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; }
-        .btn-confirm-final:disabled { opacity: 0.5; cursor: not-allowed; background: var(--bg-elevated); color: var(--text-muted); }
+        .confirm-actions, .success-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+        .btn-confirm-final { background: var(--success); color: var(--bg-base); border: none; padding: 11px 22px; border-radius: 10px; font-size: 14px; font-weight: 700; cursor: pointer; font-family: inherit; transition: all 0.15s ease; }
+        .btn-confirm-final:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(62, 229, 224, 0.3); }
+        .btn-confirm-final:disabled { opacity: 0.5; cursor: not-allowed; }
 
         @media (max-width: 768px) {
           .page { padding: 16px; }
           .header h1 { font-size: 20px; }
           .data-grid { grid-template-columns: 1fr; }
-          .bottom-actions { flex-direction: column-reverse; }
-          .btn-secondary, .btn-process { width: 100%; }
+          .bottom-actions, .confirm-actions, .success-actions { flex-direction: column-reverse; }
+          .btn-secondary, .btn-process, .btn-confirm-final { width: 100%; }
         }
       `}</style>
     </div>
