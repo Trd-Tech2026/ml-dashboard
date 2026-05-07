@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import Link from 'next/link'
 import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
+import CollapsibleSection from '../../components/CollapsibleSection'
 
 export const dynamic = 'force-dynamic'
 
@@ -96,7 +97,7 @@ export default async function Historicas({ searchParams }: Props) {
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
-  // Últimas 100 órdenes Full del período (query separada para no estar limitado a las 100 globales)
+  // Últimas 100 órdenes Full del período
   const { data: recientesFullRaw } = await supabase
     .from('orders')
     .select(`
@@ -194,14 +195,17 @@ export default async function Historicas({ searchParams }: Props) {
       </div>
 
       <div className="tabla-container">
-        <h2>Últimas 100 ventas del período</h2>
-        <p className="total-info">Total de órdenes en el período: {todasOrdenes.length.toLocaleString('es-AR')}</p>
-
-        {ordenes.length === 0 ? (
-          <p className="empty">No hay ventas en este período.</p>
-        ) : (
-          <VentasTabla ordenes={ordenes} mostrarHora={false} />
-        )}
+        <CollapsibleSection
+          title="Últimas 100 ventas del período"
+          subtitle={`Total de órdenes en el período: ${todasOrdenes.length.toLocaleString('es-AR')}`}
+          defaultOpen={true}
+        >
+          {ordenes.length === 0 ? (
+            <p className="empty">No hay ventas en este período.</p>
+          ) : (
+            <VentasTabla ordenes={ordenes} mostrarHora={false} />
+          )}
+        </CollapsibleSection>
       </div>
 
       {/* === SECCIÓN VENTAS FULL === */}
@@ -221,14 +225,17 @@ export default async function Historicas({ searchParams }: Props) {
         </div>
 
         <div className="tabla-container">
-          <h2>Últimas 100 ventas Full del período</h2>
-          <p className="total-info">Total Full en el período: {todasFull.length.toLocaleString('es-AR')}</p>
-
-          {ordenesFullTabla.length === 0 ? (
-            <p className="empty">No hay ventas Full en este período.</p>
-          ) : (
-            <VentasTabla ordenes={ordenesFullTabla} mostrarHora={false} />
-          )}
+          <CollapsibleSection
+            title="Últimas 100 ventas Full del período"
+            subtitle={`Total Full en el período: ${todasFull.length.toLocaleString('es-AR')}`}
+            defaultOpen={true}
+          >
+            {ordenesFullTabla.length === 0 ? (
+              <p className="empty">No hay ventas Full en este período.</p>
+            ) : (
+              <VentasTabla ordenes={ordenesFullTabla} mostrarHora={false} />
+            )}
+          </CollapsibleSection>
         </div>
       </div>
 
@@ -333,17 +340,6 @@ export default async function Historicas({ searchParams }: Props) {
           border-radius: 12px;
           padding: 20px 24px;
         }
-        .tabla-container h2 {
-          margin: 0 0 6px;
-          color: var(--text-primary);
-          font-size: 16px;
-          font-weight: 600;
-        }
-        .total-info {
-          color: var(--text-muted);
-          font-size: 12px;
-          margin: 0 0 16px;
-        }
         .empty {
           color: var(--text-muted);
           font-size: 13px;
@@ -416,12 +412,6 @@ export default async function Historicas({ searchParams }: Props) {
           }
           .tabla-container {
             padding: 14px;
-          }
-          .tabla-container h2 {
-            font-size: 15px;
-          }
-          .total-info {
-            font-size: 11px;
           }
           .full-section {
             margin-top: 24px;

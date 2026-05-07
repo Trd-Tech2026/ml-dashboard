@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
+import CollapsibleSection from '../../components/CollapsibleSection'
 
 export const dynamic = 'force-dynamic'
 
@@ -125,13 +126,16 @@ export default async function Ayer() {
       </div>
 
       <div className="tabla-container">
-        <h2>Detalle ({ordenes.length} {ordenes.length === 1 ? 'venta' : 'ventas'})</h2>
-
-        {ordenes.length === 0 ? (
-          <p className="empty">No hubo ventas ayer.</p>
-        ) : (
-          <VentasTabla ordenes={ordenes} mostrarHora={true} timeZone={TZ} />
-        )}
+        <CollapsibleSection
+          title={`Detalle (${ordenes.length} ${ordenes.length === 1 ? 'venta' : 'ventas'})`}
+          defaultOpen={true}
+        >
+          {ordenes.length === 0 ? (
+            <p className="empty">No hubo ventas ayer.</p>
+          ) : (
+            <VentasTabla ordenes={ordenes} mostrarHora={true} timeZone={TZ} />
+          )}
+        </CollapsibleSection>
       </div>
 
       {/* === SECCIÓN VENTAS FULL === */}
@@ -151,13 +155,16 @@ export default async function Ayer() {
         </div>
 
         <div className="tabla-container">
-          <h2>Detalle Full ({ordenesFull.length} {ordenesFull.length === 1 ? 'venta' : 'ventas'})</h2>
-
-          {ordenesFull.length === 0 ? (
-            <p className="empty">No hubo ventas Full ayer.</p>
-          ) : (
-            <VentasTabla ordenes={ordenesFull} mostrarHora={true} timeZone={TZ} />
-          )}
+          <CollapsibleSection
+            title={`Detalle Full (${ordenesFull.length} ${ordenesFull.length === 1 ? 'venta' : 'ventas'})`}
+            defaultOpen={true}
+          >
+            {ordenesFull.length === 0 ? (
+              <p className="empty">No hubo ventas Full ayer.</p>
+            ) : (
+              <VentasTabla ordenes={ordenesFull} mostrarHora={true} timeZone={TZ} />
+            )}
+          </CollapsibleSection>
         </div>
       </div>
 
@@ -227,12 +234,6 @@ export default async function Ayer() {
           border-radius: 14px;
           padding: 24px;
         }
-        .tabla-container h2 {
-          margin: 0 0 16px;
-          color: var(--text-primary);
-          font-size: 18px;
-          font-weight: 600;
-        }
         .empty {
           color: var(--text-muted);
         }
@@ -291,9 +292,6 @@ export default async function Ayer() {
           }
           .tabla-container {
             padding: 16px;
-          }
-          .tabla-container h2 {
-            font-size: 15px;
           }
           .full-section {
             margin-top: 24px;
