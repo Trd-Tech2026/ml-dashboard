@@ -79,6 +79,23 @@ async function fetchShippingData(shippingId: string | number, token: string) {
   }
 }
 
+// Trae el logistic_type del shipment (Full = "fulfillment", Flex = "self_service",
+// Colecta = "cross_docking", Punto = "drop_off", etc).
+async function fetchShipmentInfo(shippingId: string | number, token: string) {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return { logistic_type: null as string | null }
+    const data = await res.json()
+    return {
+      logistic_type: (data?.logistic_type ?? null) as string | null
+    }
+  } catch {
+    return { logistic_type: null as string | null }
+  }
+}
+
 function calcularComponentesPagos(payments: any[]) {
   let comision = 0
   let impuestos = 0
@@ -126,16 +143,28 @@ export async function GET(request: Request) {
   const tokenRow = tokenData as TokenRow
   let token = tokenRow.access_token
 
-  // Buscar órdenes paid donde net_received >= total_amount (no procesadas con la nueva lógica)
+  // Contar cuántas órdenes con logistic_type NULL hay totales (para mostrar progreso)
+  const { count: pendingNullCount } = await supabase
+    .from('orders')
+    .select('order_id', { count: 'exact', head: true })
+    .eq('status', 'paid')
+    .is('shipping_logistic_type', null)
+
+  // Buscar órdenes que necesitan procesamiento:
+  // Caso A: financiero roto (net_received >= total_amount)
+  // Caso B: shipping_logistic_type NULL (columna nueva, todavía sin llenar)
   const { data: ordersToFix } = await supabase
     .from('orders')
-    .select('order_id, total_amount, status, net_received')
+    .select('order_id, total_amount, status, net_received, shipping_logistic_type')
     .eq('status', 'paid')
     .order('date_created', { ascending: false })
     .limit(chunkSize * 3)
 
   const orders = (ordersToFix ?? [])
-    .filter(o => Number(o.net_received ?? 0) >= Number(o.total_amount ?? 0))
+    .filter(o =>
+      Number(o.net_received ?? 0) >= Number(o.total_amount ?? 0) ||
+      o.shipping_logistic_type === null
+    )
     .slice(0, chunkSize)
 
   if (orders.length === 0) {
@@ -143,11 +172,12 @@ export async function GET(request: Request) {
       ok: true,
       mensaje: '✅ No hay más órdenes pendientes',
       processed: 0,
+      pending_null_count: pendingNullCount ?? 0,
       done: true,
     })
   }
 
-  console.log(`[backfill] Procesando ${orders.length}...`)
+  console.log(`[backfill] Procesando ${orders.length}... (NULL pendientes: ${pendingNullCount})`)
 
   const firstCheck = await fetch(`https://api.mercadolibre.com/orders/${orders[0].order_id}`, {
     headers: { Authorization: `Bearer ${token}` }
@@ -177,39 +207,65 @@ export async function GET(request: Request) {
       }
 
       const total = Number(o.total_amount ?? 0)
+      const needsFinancialUpdate = Number(o.net_received ?? 0) >= total
+      const needsLogisticUpdate = o.shipping_logistic_type === null
 
-      const paymentIds = (orderDetail.payments ?? []).map((p: any) => p.id).filter(Boolean)
-      const mpPayments = await Promise.all(
-        paymentIds.map((id: any) => fetchMPPayment(id, token))
-      )
-      const validMp = mpPayments.filter(Boolean)
+      // Datos de envío y logistic_type (en paralelo)
+      let costoSeller = 0
+      let bonificacion = 0
+      let shippingLogisticType: string | null = null
+      if (orderDetail.shipping?.id) {
+        const [ship, info] = await Promise.all([
+          fetchShippingData(orderDetail.shipping.id, token),
+          fetchShipmentInfo(orderDetail.shipping.id, token),
+        ])
+        costoSeller = ship.costoSeller
+        bonificacion = ship.bonificacion
+        shippingLogisticType = info.logistic_type
+      }
 
-      if (validMp.length === 0) {
-        fetchErrors++
+      // Si la orden no tuvo shipping (caso raro), marcamos 'none' para que no se reintente
+      const finalLogisticType = orderDetail.shipping?.id
+        ? (shippingLogisticType ?? 'unknown')
+        : 'none'
+
+      const updateData: Record<string, any> = {}
+
+      if (needsLogisticUpdate) {
+        updateData.shipping_logistic_type = finalLogisticType
+      }
+
+      if (needsFinancialUpdate) {
+        const paymentIds = (orderDetail.payments ?? []).map((p: any) => p.id).filter(Boolean)
+        const mpPayments = await Promise.all(
+          paymentIds.map((id: any) => fetchMPPayment(id, token))
+        )
+        const validMp = mpPayments.filter(Boolean)
+
+        if (validMp.length === 0) {
+          // No hay payments pero igual updateamos logistic_type si lo necesitaba
+          if (Object.keys(updateData).length === 0) {
+            fetchErrors++
+            return null
+          }
+          return { order_id: o.order_id, updateData }
+        }
+
+        const { comision, impuestos } = calcularComponentesPagos(validMp)
+        const net_received = total - comision - impuestos - costoSeller + bonificacion
+
+        updateData.marketplace_fee = comision + impuestos
+        updateData.shipping_cost = costoSeller
+        updateData.discounts = bonificacion
+        updateData.net_received = net_received
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        // Nada que actualizar, ignorar
         return null
       }
 
-      // Datos de envío
-      let costoSeller = 0
-      let bonificacion = 0
-      if (orderDetail.shipping?.id) {
-        const ship = await fetchShippingData(orderDetail.shipping.id, token)
-        costoSeller = ship.costoSeller
-        bonificacion = ship.bonificacion
-      }
-
-      const { comision, impuestos } = calcularComponentesPagos(validMp)
-
-      // Recibís = total - comisión - impuestos - costo_envío + bonificación
-      const net_received = total - comision - impuestos - costoSeller + bonificacion
-
-      return {
-        order_id: o.order_id,
-        marketplace_fee: comision + impuestos,
-        shipping_cost: costoSeller,
-        discounts: bonificacion,
-        net_received,
-      }
+      return { order_id: o.order_id, updateData }
     }))
 
     const validUpdates = updates.filter((u): u is NonNullable<typeof u> => u !== null)
@@ -218,18 +274,13 @@ export async function GET(request: Request) {
       validUpdates.map(u =>
         supabase
           .from('orders')
-          .update({
-            marketplace_fee: u.marketplace_fee,
-            shipping_cost: u.shipping_cost,
-            discounts: u.discounts,
-            net_received: u.net_received,
-          })
+          .update(u.updateData)
           .eq('order_id', u.order_id)
           .select('order_id')
       )
     )
 
-    updateResults.forEach((r, idx) => {
+    updateResults.forEach((r) => {
       if (r.error || !r.data || r.data.length === 0) {
         updateErrors++
       } else {
@@ -241,8 +292,10 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     processed,
+    pending_null_count: pendingNullCount ?? 0,
     fetch_errors: fetchErrors,
     update_errors: updateErrors,
-    mensaje: `Procesadas ${processed}. Si quedan más, volvé a llamar.`
+    done: false,
+    mensaje: `Procesadas ${processed}. Quedan ~${Math.max(0, (pendingNullCount ?? 0) - processed)} sin shipping_logistic_type. Volvé a llamar.`
   })
 }
