@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import StockTabs from '../../components/StockTabs'
 
 type ExtractedSupplier = { name: string | null; cuit: string | null }
 type ExtractedInvoice = { number: string | null; date: string | null; type: string | null; total_amount: number | null }
@@ -225,10 +226,11 @@ export default function IngresosPage() {
 
   return (
     <div className="page">
+      <StockTabs />
+
       {step === 'upload' && (
         <>
           <div className="header">
-            <button className="back-link" onClick={() => router.push('/stock')}>← Volver a Stock</button>
             <h1>📦 Cargar factura de compra</h1>
             <p className="subtitle">Subí una factura y la IA va a extraer los datos automáticamente</p>
           </div>
@@ -444,7 +446,7 @@ export default function IngresosPage() {
 
           <div className="success-actions">
             <button className="btn-secondary" onClick={handleReset}>📦 Cargar otra factura</button>
-            <button className="btn-process" onClick={() => router.push('/stock')}>← Volver a Stock</button>
+            <button className="btn-process" onClick={() => router.push('/stock/historial')}>📋 Ver en historial</button>
           </div>
         </>
       )}

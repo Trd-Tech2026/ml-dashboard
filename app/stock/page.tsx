@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useEffect, useState, useCallback, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import StockTabs from '../components/StockTabs'
 
 // ===== Tipos =====
 type Item = {
@@ -180,24 +180,21 @@ function itemsToFakeGroups(items: Item[]): Group[] {
 
 // ===== Componente principal =====
 export default function StockPage() {
-  const [activeTab, setActiveTab] = useState<'productos' | 'combos'>('productos')
+  return (
+    <Suspense fallback={<div className="stock-page-fallback" />}>
+      <StockPageContent />
+    </Suspense>
+  )
+}
+
+function StockPageContent() {
+  const searchParams = useSearchParams()
+  const tab = searchParams.get('tab') || 'productos'
+  const activeTab: 'productos' | 'combos' = tab === 'combos' ? 'combos' : 'productos'
 
   return (
     <div className="stock-page">
-      <div className="tabs-header">
-        <button
-          className={`tab ${activeTab === 'productos' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('productos')}
-        >
-          Productos
-        </button>
-        <button
-          className={`tab ${activeTab === 'combos' ? 'tab-active' : ''}`}
-          onClick={() => setActiveTab('combos')}
-        >
-          Combos
-        </button>
-      </div>
+      <StockTabs />
 
       {activeTab === 'productos' ? <ProductosView /> : <CombosView />}
 
@@ -206,30 +203,6 @@ export default function StockPage() {
           padding: 24px 40px 48px;
           max-width: 1400px;
           margin: 0 auto;
-        }
-        .tabs-header {
-          display: flex;
-          gap: 4px;
-          border-bottom: 1px solid var(--border-subtle);
-          margin-bottom: 24px;
-        }
-        .tab {
-          background: transparent;
-          border: none;
-          padding: 12px 20px;
-          color: var(--text-muted);
-          font-size: 14px;
-          font-weight: 600;
-          cursor: pointer;
-          font-family: inherit;
-          border-bottom: 2px solid transparent;
-          margin-bottom: -1px;
-          transition: all 0.15s ease;
-        }
-        .tab:hover { color: var(--text-secondary); }
-        .tab.tab-active {
-          color: var(--accent);
-          border-bottom-color: var(--accent);
         }
         @media (max-width: 768px) {
           .stock-page { padding: 16px; }
@@ -446,14 +419,6 @@ function ProductosView() {
           </p>
         </div>
         <div className="header-actions">
-          <button className="btn-ingresos" onClick={() => router.push('/stock/historial')}>
-            <span>📋</span>
-            <span>Historial</span>
-          </button>
-          <button className="btn-ingresos" onClick={() => router.push('/stock/ingresos')}>
-            <span>📦</span>
-            <span>Cargar factura</span>
-          </button>
           <button className="btn-create-manual" onClick={() => { setEditingManualSku(null); setShowManualModal(true); }}>
             <span>+</span>
             <span>Producto manual</span>
@@ -823,29 +788,6 @@ function ProductosView() {
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
         .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-        .btn-ingresos {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          background: var(--bg-card);
-          color: var(--text-primary);
-          border: 1px solid var(--border-medium);
-          padding: 11px 16px;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
-          font-family: inherit;
-          text-decoration: none;
-          transition: all 0.15s ease;
-          white-space: nowrap;
-        }
-        .btn-ingresos:hover {
-          background: var(--bg-elevated);
-          border-color: var(--accent);
-          color: var(--accent);
-        }
-        .btn-ingresos span:first-child { font-size: 14px; line-height: 1; }
         .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
         .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
@@ -957,7 +899,7 @@ function ProductosView() {
           .header { flex-direction: column; align-items: stretch; gap: 12px; }
           .header h1 { font-size: 22px; }
           .header-actions { flex-direction: column; }
-          .btn-ingresos, .btn-create-manual, .btn-refresh { width: 100%; justify-content: center; }
+          .btn-create-manual, .btn-refresh { width: 100%; justify-content: center; }
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
           .top-toggles { flex-direction: column; }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import StockTabs from '../../components/StockTabs'
 
 type Supplier = {
   id: number
@@ -129,8 +130,9 @@ export default function HistorialPage() {
 
   return (
     <div className="page">
+      <StockTabs />
+
       <div className="header">
-        <button className="back-link" onClick={() => router.push('/stock')}>← Volver a Stock</button>
         <h1>📋 Historial de ingresos</h1>
         <p className="subtitle">Listado de todas las facturas de compra cargadas. Podés anular ingresos para revertir el stock.</p>
       </div>
@@ -258,8 +260,6 @@ export default function HistorialPage() {
       <style jsx>{`
         .page { padding: 24px 40px 48px; max-width: 1200px; margin: 0 auto; }
         .header { margin-bottom: 24px; }
-        .back-link { display: inline-block; color: var(--text-muted); font-size: 13px; margin-bottom: 8px; background: transparent; border: none; cursor: pointer; padding: 0; font-family: inherit; }
-        .back-link:hover { color: var(--accent); }
         .header h1 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
 
