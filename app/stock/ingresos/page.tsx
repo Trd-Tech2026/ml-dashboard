@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import StockTabs from '../../components/StockTabs'
+import StockTabs from '../../../components/StockTabs'
 
 type ExtractedSupplier = { name: string | null; cuit: string | null }
 type ExtractedInvoice = { number: string | null; date: string | null; type: string | null; total_amount: number | null }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import StockTabs from '../../components/StockTabs'
+import StockTabs from '../../../components/StockTabs'
 
 type Supplier = {
   id: number

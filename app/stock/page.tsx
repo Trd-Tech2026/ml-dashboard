@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import StockTabs from '../components/StockTabs'
-
+import StockTabs from '../../components/StockTabs'
 // ===== Tipos =====
 type Item = {
   item_id: string
