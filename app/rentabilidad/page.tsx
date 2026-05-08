@@ -705,9 +705,9 @@ export default async function RentabilidadPage({ searchParams }: Props) {
           display: inline-flex;
           align-items: center;
           gap: 4px;
-          background: rgb(0, 238, 255);
-          color: #0044fd;
-          border: 1px solid rgb(0, 148, 247);
+          background: rgba(0, 238, 255, 0.15);
+          color: #f87171;
+          border: 1px solid rgba(239, 68, 68, 0.35);
           padding: 2px 8px;
           border-radius: 12px;
           font-size: 9px;
@@ -718,7 +718,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
           content: '';
           width: 6px;
           height: 6px;
-          background: #07cfd6;
+          background: #f87171;
           border-radius: 50%;
           animation: pulse 2s ease-in-out infinite;
         }
@@ -736,7 +736,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
           margin-bottom: 6px;
         }
         .hero-negative .hero-amount {
-          background: linear-gradient(135deg, #0501fa 0%, #0a88dd 100%);
+          background: linear-gradient(135deg, #f87171 0%, #fb923c 100%);
           -webkit-background-clip: text;
           background-clip: text;
           -webkit-text-fill-color: transparent;
