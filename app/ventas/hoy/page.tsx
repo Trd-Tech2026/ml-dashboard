@@ -54,13 +54,11 @@ export default async function Hoy() {
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
-  // === Cálculos generales ===
   const ventasPagadas = ordenes.filter(o => o.status === 'paid')
   const cancelaciones = ordenes.filter(o => o.status === 'cancelled')
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
-  // === Cálculos Full ===
   const ordenesFull = ordenes.filter(o => o.shipping_logistic_type === 'fulfillment')
   const ventasFullPagadas = ordenesFull.filter(o => o.status === 'paid')
   const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
@@ -113,7 +111,7 @@ export default async function Hoy() {
       <div className="tabla-container">
         <CollapsibleSection
           title={`Detalle (${ordenes.length} ${ordenes.length === 1 ? 'venta' : 'ventas'})`}
-          defaultOpen={true}
+          defaultOpen={false}
         >
           {ordenes.length === 0 ? (
             <p className="empty">
@@ -125,7 +123,6 @@ export default async function Hoy() {
         </CollapsibleSection>
       </div>
 
-      {/* === SECCIÓN VENTAS FULL === */}
       <div className="full-section">
         <div className="full-header">
           <h2>🏬 Ventas Full</h2>
@@ -144,7 +141,7 @@ export default async function Hoy() {
         <div className="tabla-container">
           <CollapsibleSection
             title={`Detalle Full (${ordenesFull.length} ${ordenesFull.length === 1 ? 'venta' : 'ventas'})`}
-            defaultOpen={true}
+            defaultOpen={false}
           >
             {ordenesFull.length === 0 ? (
               <p className="empty">No hay ventas Full hoy.</p>
@@ -156,137 +153,34 @@ export default async function Hoy() {
       </div>
 
       <style>{`
-        .page {
-          padding: 32px 40px 40px;
-          min-height: 100vh;
-        }
-        .header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 28px;
-          gap: 16px;
-        }
-        .header h1 {
-          color: var(--text-primary);
-          margin: 0 0 4px;
-          font-size: 26px;
-          font-weight: 700;
-        }
-        .fecha {
-          color: var(--text-muted);
-          margin: 0;
-          text-transform: capitalize;
-          font-size: 13px;
-        }
-        .kpis {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 16px;
-          margin-bottom: 28px;
-        }
-        .kpi-card {
-          background: var(--bg-card);
-          border: 1px solid var(--border-subtle);
-          border-radius: 14px;
-          padding: 20px 22px;
-          position: relative;
-          overflow: hidden;
-        }
-        .kpi-card::before {
-          content: '';
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          height: 3px;
-          background: var(--kpi-accent);
-          opacity: 0.7;
-        }
-        .kpi-titulo {
-          color: var(--text-muted);
-          font-size: 12px;
-          margin: 0 0 6px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          font-weight: 600;
-        }
-        .kpi-valor {
-          font-size: 26px;
-          font-weight: 700;
-          margin: 0;
-          color: var(--text-primary);
-        }
-        .tabla-container {
-          background: var(--bg-card);
-          border: 1px solid var(--border-subtle);
-          border-radius: 14px;
-          padding: 24px;
-        }
-        .empty {
-          color: var(--text-muted);
-        }
-
-        .full-section {
-          margin-top: 36px;
-          padding-top: 28px;
-          border-top: 1px solid var(--border-subtle);
-        }
-        .full-header {
-          margin-bottom: 20px;
-        }
-        .full-header h2 {
-          margin: 0 0 4px;
-          color: var(--text-primary);
-          font-size: 22px;
-          font-weight: 700;
-        }
-        .full-header p {
-          margin: 0;
-          color: var(--text-muted);
-          font-size: 13px;
-        }
-        .kpi-full {
-          background: linear-gradient(135deg, rgba(62, 229, 224, 0.04) 0%, rgba(28, 160, 196, 0.02) 100%);
-        }
-
+        .page { padding: 32px 40px 40px; min-height: 100vh; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; gap: 16px; }
+        .header h1 { color: var(--text-primary); margin: 0 0 4px; font-size: 26px; font-weight: 700; }
+        .fecha { color: var(--text-muted); margin: 0; text-transform: capitalize; font-size: 13px; }
+        .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+        .kpi-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 20px 22px; position: relative; overflow: hidden; }
+        .kpi-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-accent); opacity: 0.7; }
+        .kpi-titulo { color: var(--text-muted); font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+        .kpi-valor { font-size: 26px; font-weight: 700; margin: 0; color: var(--text-primary); }
+        .tabla-container { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 24px; }
+        .empty { color: var(--text-muted); }
+        .full-section { margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
+        .full-header { margin-bottom: 20px; }
+        .full-header h2 { margin: 0 0 4px; color: var(--text-primary); font-size: 22px; font-weight: 700; }
+        .full-header p { margin: 0; color: var(--text-muted); font-size: 13px; }
+        .kpi-full { background: linear-gradient(135deg, rgba(62, 229, 224, 0.04) 0%, rgba(28, 160, 196, 0.02) 100%); }
         @media (max-width: 768px) {
-          .page {
-            padding: 16px;
-          }
-          .header {
-            flex-direction: column;
-            align-items: stretch;
-            gap: 12px;
-          }
-          .header h1 {
-            font-size: 20px;
-          }
-          .fecha {
-            font-size: 12px;
-          }
-          .kpis {
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            margin-bottom: 16px;
-          }
-          .kpi-card {
-            padding: 14px;
-          }
-          .kpi-titulo {
-            font-size: 11px;
-          }
-          .kpi-valor {
-            font-size: 18px;
-          }
-          .tabla-container {
-            padding: 16px;
-          }
-          .full-section {
-            margin-top: 24px;
-            padding-top: 20px;
-          }
-          .full-header h2 {
-            font-size: 18px;
-          }
+          .page { padding: 16px; }
+          .header { flex-direction: column; align-items: stretch; gap: 12px; }
+          .header h1 { font-size: 20px; }
+          .fecha { font-size: 12px; }
+          .kpis { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
+          .kpi-card { padding: 14px; }
+          .kpi-titulo { font-size: 11px; }
+          .kpi-valor { font-size: 18px; }
+          .tabla-container { padding: 16px; }
+          .full-section { margin-top: 24px; padding-top: 20px; }
+          .full-header h2 { font-size: 18px; }
         }
       `}</style>
     </div>
