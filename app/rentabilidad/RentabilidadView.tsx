@@ -1,10 +1,13 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import CargarAdsModal from '../components/CargarAdsModal'
 import GastoRapidoModal from '../components/GastoRapidoModal'
 import ConfigModal from '../components/ConfigModal'
+import QuickCalc from '../components/QuickCalc'
+import InsightsIA from '../components/InsightsIA'
 import type { Calculo } from './page'
 
 type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
@@ -33,9 +36,25 @@ function calcCambio(actual: number, previo: number): Cambio {
 export default function RentabilidadView({
   period, labelPeriodo, labelComparacion, calcActual, calcPrev, iibbPct,
 }: Props) {
+  const router = useRouter()
   const [adsModalOpen, setAdsModalOpen] = useState(false)
   const [gastoModalOpen, setGastoModalOpen] = useState(false)
   const [configModalOpen, setConfigModalOpen] = useState(false)
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [activeTab, setActiveTab] = useState<'metricas' | 'insights'>('metricas')
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      await fetch('/api/sync', { cache: 'no-store' })
+      router.refresh()
+    } catch (err) {
+      console.error('Error sync:', err)
+    } finally {
+      setTimeout(() => setSyncing(false), 1000)
+    }
+  }
 
   const formatARS = (n: number) => {
     const abs = Math.abs(n)
@@ -93,11 +112,18 @@ export default function RentabilidadView({
           <p className="subtitle">Métricas combinadas · datos en tiempo real</p>
         </div>
         <div className="header-actions">
+          <button className="btn-action btn-action-sync" onClick={handleSync} disabled={syncing}>
+            <span className={syncing ? 'spinning' : ''}>{syncing ? '⏳' : '🔄'}</span>
+            {syncing ? 'Sincronizando...' : 'Sincronizar'}
+          </button>
           <button className="btn-action" onClick={() => setAdsModalOpen(true)}>
-            <span>📊</span> Cargar gasto Ads
+            <span>📊</span> Ads
           </button>
           <button className="btn-action btn-action-warning" onClick={() => setGastoModalOpen(true)}>
-            <span>💸</span> Gasto rápido
+            <span>💸</span> Gasto
+          </button>
+          <button className="btn-action" onClick={() => setCalcOpen(true)} title="Atajo: Esc cierra">
+            <span>🧮</span> Calc
           </button>
           <button className="btn-action" onClick={() => setConfigModalOpen(true)}>
             <span>⚙️</span> Config
@@ -105,174 +131,218 @@ export default function RentabilidadView({
         </div>
       </div>
 
-      <div className="period-tabs">
-        {periodos.map(p => {
-          const activo = period === p.value
-          return (
-            <Link
-              key={p.value}
-              href={`/rentabilidad?period=${p.value}`}
-              className={`period-tab ${activo ? 'period-active' : ''}`}
-            >
-              <span>{p.icon}</span>
-              <span>{p.label}</span>
-            </Link>
-          )
-        })}
+      <div className="main-tabs">
+        <button
+          className={`main-tab ${activeTab === 'metricas' ? 'main-tab-active' : ''}`}
+          onClick={() => setActiveTab('metricas')}
+        >
+          📊 Métricas
+        </button>
+        <button
+          className={`main-tab ${activeTab === 'insights' ? 'main-tab-active' : ''}`}
+          onClick={() => setActiveTab('insights')}
+        >
+          🤖 Insights IA
+        </button>
       </div>
 
-      <div className={`hero ${calcActual.ganancia >= 0 ? 'hero-positive' : 'hero-negative'}`}>
-        <div className="hero-bg">
-          <div className="hero-orb orb-1" />
-          <div className="hero-orb orb-2" />
-          <div className="hero-orb orb-3" />
-        </div>
-        <div className="hero-content">
-          <div className="hero-left">
-            <div className="hero-emoji">{calcActual.ganancia >= 0 ? '🚀' : '⚠️'}</div>
-            <div>
-              <div className="hero-label">
-                GANANCIA · {labelPeriodo.toUpperCase()}
-                {period === 'hoy' && <span className="badge-live">EN VIVO</span>}
+      {activeTab === 'metricas' ? (
+        <>
+          <div className="period-tabs">
+            {periodos.map(p => {
+              const activo = period === p.value
+              return (
+                <Link
+                  key={p.value}
+                  href={`/rentabilidad?period=${p.value}`}
+                  className={`period-tab ${activo ? 'period-active' : ''}`}
+                >
+                  <span>{p.icon}</span>
+                  <span>{p.label}</span>
+                </Link>
+              )
+            })}
+          </div>
+
+          <div className={`hero ${calcActual.ganancia >= 0 ? 'hero-positive' : 'hero-negative'}`}>
+            <div className="hero-bg">
+              <div className="hero-orb orb-1" />
+              <div className="hero-orb orb-2" />
+              <div className="hero-orb orb-3" />
+            </div>
+            <div className="hero-content">
+              <div className="hero-left">
+                <div className="hero-emoji">{calcActual.ganancia >= 0 ? '🚀' : '⚠️'}</div>
+                <div>
+                  <div className="hero-label">
+                    GANANCIA · {labelPeriodo.toUpperCase()}
+                    {period === 'hoy' && <span className="badge-live">EN VIVO</span>}
+                  </div>
+                  <div className="hero-amount">{formatARSSigned(calcActual.ganancia)}</div>
+                  <div className="hero-subamount">{formatARSFull(calcActual.ganancia)}</div>
+                  <div className="hero-cambio">
+                    {renderCambio(cambioGanancia, labelComparacion)}
+                  </div>
+                </div>
               </div>
-              <div className="hero-amount">{formatARSSigned(calcActual.ganancia)}</div>
-              <div className="hero-subamount">{formatARSFull(calcActual.ganancia)}</div>
-              <div className="hero-cambio">
-                {renderCambio(cambioGanancia, labelComparacion)}
+              <div className="hero-right">
+                <div className="hero-margen-label">MARGEN</div>
+                <div className="hero-margen-value">{calcActual.facturacion > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}</div>
+                <div className="hero-margen-tag">{margenLabel}</div>
+                <div className="hero-cambio">
+                  {renderCambio(cambioMargen, labelComparacion)}
+                </div>
+              </div>
+            </div>
+
+            <div className="stats-grid">
+              <div className="stat-cell">
+                <div className="stat-label">FACTURACIÓN</div>
+                <div className="stat-value stat-positive">{formatARS(calcActual.facturacion)}</div>
+                <div className="stat-detail">{calcActual.ventas} {calcActual.ventas === 1 ? 'venta' : 'ventas'}</div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">− COMISIÓN ML</div>
+                <div className="stat-value stat-negative">−{formatARS(calcActual.comision)}</div>
+                <div className="stat-detail">{calcActual.comisionPct.toFixed(1)}% efectivo</div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">− ENVÍOS ME</div>
+                <div className="stat-value stat-negative">−{formatARS(calcActual.envios)}</div>
+                <div className="stat-detail">{calcActual.envioCount} {calcActual.envioCount === 1 ? 'envío' : 'envíos'}</div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">+ FLEX (BONIF.)</div>
+                <div className="stat-value stat-positive">+{formatARS(calcActual.flexBonif)}</div>
+                <div className="stat-detail">{calcActual.flexCount} ventas Flex</div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">− PUBLICIDAD</div>
+                <div className="stat-value stat-negative">−{formatARS(calcActual.publicidad)}</div>
+                <div className="stat-detail">
+                  {calcActual.publicidad === 0
+                    ? <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 cargar gastos</button>
+                    : <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 ver/editar</button>
+                  }
+                </div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">− IIBB ({iibbPct.toFixed(1)}%)</div>
+                <div className="stat-value stat-negative">−{formatARS(calcActual.iibb)}</div>
+                <div className="stat-detail">
+                  <button className="link-btn" onClick={() => setConfigModalOpen(true)}>⚙️ editar %</button>
+                </div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">− COSTO MERCA</div>
+                <div className="stat-value stat-negative">−{formatARS(calcActual.costoMerca)}</div>
+                <div className="stat-detail">
+                  {calcActual.coberturaCosto < 100 ? (
+                    <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
+                      cobertura {calcActual.coberturaCosto.toFixed(0)}%
+                    </button>
+                  ) : `cobertura 100%`}
+                </div>
+              </div>
+              <div className="stat-cell">
+                <div className="stat-label">− GASTOS VARIOS</div>
+                <div className="stat-value stat-negative">−{formatARS(calcActual.gastosVarios)}</div>
+                <div className="stat-detail">
+                  {calcActual.gastosVarios === 0
+                    ? <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 cargar gasto</button>
+                    : <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 ver/editar</button>
+                  }
+                </div>
               </div>
             </div>
           </div>
-          <div className="hero-right">
-            <div className="hero-margen-label">MARGEN</div>
-            <div className="hero-margen-value">{calcActual.facturacion > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}</div>
-            <div className="hero-margen-tag">{margenLabel}</div>
-            <div className="hero-cambio">
-              {renderCambio(cambioMargen, labelComparacion)}
-            </div>
-          </div>
-        </div>
 
-        <div className="stats-grid">
-          <div className="stat-cell">
-            <div className="stat-label">FACTURACIÓN</div>
-            <div className="stat-value stat-positive">{formatARS(calcActual.facturacion)}</div>
-            <div className="stat-detail">{calcActual.ventas} {calcActual.ventas === 1 ? 'venta' : 'ventas'}</div>
-          </div>
-          <div className="stat-cell">
-            <div className="stat-label">− COMISIÓN ML</div>
-            <div className="stat-value stat-negative">−{formatARS(calcActual.comision)}</div>
-            <div className="stat-detail">{calcActual.comisionPct.toFixed(1)}% efectivo</div>
-          </div>
-          <div className="stat-cell">
-            <div className="stat-label">− ENVÍOS ME</div>
-            <div className="stat-value stat-negative">−{formatARS(calcActual.envios)}</div>
-            <div className="stat-detail">{calcActual.envioCount} {calcActual.envioCount === 1 ? 'envío' : 'envíos'}</div>
-          </div>
-          <div className="stat-cell">
-            <div className="stat-label">+ FLEX (BONIF.)</div>
-            <div className="stat-value stat-positive">+{formatARS(calcActual.flexBonif)}</div>
-            <div className="stat-detail">{calcActual.flexCount} ventas Flex</div>
-          </div>
-          <div className="stat-cell">
-            <div className="stat-label">− PUBLICIDAD</div>
-            <div className="stat-value stat-negative">−{formatARS(calcActual.publicidad)}</div>
-            <div className="stat-detail">
-              {calcActual.publicidad === 0
-                ? <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 cargar gastos</button>
-                : <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 ver/editar</button>
-              }
+          <div className="mini-cards">
+            <div className="mini-card">
+              <div className="mini-label">🛒 VENTAS</div>
+              <div className="mini-value">{calcActual.ventas}</div>
+              <div className="mini-detail">{renderCambio(cambioVentas, labelComparacion)}</div>
+            </div>
+            <div className="mini-card">
+              <div className="mini-label">📦 UNIDADES</div>
+              <div className="mini-value">{calcActual.unidades}</div>
+              <div className="mini-detail">
+                {calcActual.ventas > 0 ? `${(calcActual.unidades / calcActual.ventas).toFixed(1)} u/venta` : '—'}
+              </div>
+            </div>
+            <div className="mini-card">
+              <div className="mini-label">🎫 TICKET PROM.</div>
+              <div className="mini-value">{formatARS(calcActual.ticketPromedio)}</div>
+              <div className="mini-detail">por venta</div>
+            </div>
+            <div className="mini-card">
+              <div className="mini-label">📅 DÍAS ACTIVOS</div>
+              <div className="mini-value">{calcActual.diasActivos} <span className="mini-fraction">/ {calcActual.diasTotales}</span></div>
+              <div className="mini-detail">
+                {calcActual.diasTotales > 0 ? `${((calcActual.diasActivos / calcActual.diasTotales) * 100).toFixed(0)}% del período` : '—'}
+              </div>
+            </div>
+            <div className="mini-card">
+              <div className="mini-label">🏆 MEJOR DÍA</div>
+              <div className="mini-value">{calcActual.mejorDiaMonto > 0 ? formatARS(calcActual.mejorDiaMonto) : '—'}</div>
+              <div className="mini-detail">{mejorDiaFormatted}</div>
+            </div>
+            <div className="mini-card">
+              <div className="mini-label">📈 ROAS</div>
+              <div className={`mini-value ${calcActual.publicidad > 0 ? 'mini-roas' : 'mini-disabled'}`}>
+                {calcActual.publicidad > 0 ? `×${calcActual.roas.toFixed(1)}` : '—'}
+              </div>
+              <div className="mini-detail">
+                {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin gasto cargado'}
+              </div>
             </div>
           </div>
-          <div className="stat-cell">
-            <div className="stat-label">− IIBB ({iibbPct.toFixed(1)}%)</div>
-            <div className="stat-value stat-negative">−{formatARS(calcActual.iibb)}</div>
-            <div className="stat-detail">
-              <button className="link-btn" onClick={() => setConfigModalOpen(true)}>⚙️ editar %</button>
-            </div>
-          </div>
-          <div className="stat-cell">
-            <div className="stat-label">− COSTO MERCA</div>
-            <div className="stat-value stat-negative">−{formatARS(calcActual.costoMerca)}</div>
-            <div className="stat-detail">
-              {calcActual.coberturaCosto < 100 ? (
-                <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
-                  cobertura {calcActual.coberturaCosto.toFixed(0)}%
-                </button>
-              ) : `cobertura 100%`}
-            </div>
-          </div>
-          <div className="stat-cell">
-            <div className="stat-label">− GASTOS VARIOS</div>
-            <div className="stat-value stat-negative">−{formatARS(calcActual.gastosVarios)}</div>
-            <div className="stat-detail">
-              {calcActual.gastosVarios === 0
-                ? <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 cargar gasto</button>
-                : <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 ver/editar</button>
-              }
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mini-cards">
-        <div className="mini-card">
-          <div className="mini-label">🛒 VENTAS</div>
-          <div className="mini-value">{calcActual.ventas}</div>
-          <div className="mini-detail">{renderCambio(cambioVentas, labelComparacion)}</div>
-        </div>
-        <div className="mini-card">
-          <div className="mini-label">📦 UNIDADES</div>
-          <div className="mini-value">{calcActual.unidades}</div>
-          <div className="mini-detail">
-            {calcActual.ventas > 0 ? `${(calcActual.unidades / calcActual.ventas).toFixed(1)} u/venta` : '—'}
-          </div>
-        </div>
-        <div className="mini-card">
-          <div className="mini-label">🎫 TICKET PROM.</div>
-          <div className="mini-value">{formatARS(calcActual.ticketPromedio)}</div>
-          <div className="mini-detail">por venta</div>
-        </div>
-        <div className="mini-card">
-          <div className="mini-label">📅 DÍAS ACTIVOS</div>
-          <div className="mini-value">{calcActual.diasActivos} <span className="mini-fraction">/ {calcActual.diasTotales}</span></div>
-          <div className="mini-detail">
-            {calcActual.diasTotales > 0 ? `${((calcActual.diasActivos / calcActual.diasTotales) * 100).toFixed(0)}% del período` : '—'}
-          </div>
-        </div>
-        <div className="mini-card">
-          <div className="mini-label">🏆 MEJOR DÍA</div>
-          <div className="mini-value">{calcActual.mejorDiaMonto > 0 ? formatARS(calcActual.mejorDiaMonto) : '—'}</div>
-          <div className="mini-detail">{mejorDiaFormatted}</div>
-        </div>
-        <div className="mini-card">
-          <div className="mini-label">📈 ROAS</div>
-          <div className={`mini-value ${calcActual.publicidad > 0 ? 'mini-roas' : 'mini-disabled'}`}>
-            {calcActual.publicidad > 0 ? `×${calcActual.roas.toFixed(1)}` : '—'}
-          </div>
-          <div className="mini-detail">
-            {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin gasto cargado'}
-          </div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <InsightsIA
+          calcActual={calcActual}
+          calcPrev={calcPrev}
+          period={period}
+          labelPeriodo={labelPeriodo}
+          labelComparacion={labelComparacion}
+          iibbPct={iibbPct}
+        />
+      )}
 
       {adsModalOpen && <CargarAdsModal onClose={() => setAdsModalOpen(false)} />}
       {gastoModalOpen && <GastoRapidoModal onClose={() => setGastoModalOpen(false)} />}
       {configModalOpen && <ConfigModal onClose={() => setConfigModalOpen(false)} />}
+      {calcOpen && <QuickCalc onClose={() => setCalcOpen(false)} />}
 
       <style jsx>{`
         .page { padding: 24px 40px 48px; max-width: 1500px; margin: 0 auto; }
-        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
         .header-title h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
-        .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .header-actions { display: flex; gap: 6px; flex-wrap: wrap; }
         .btn-action {
-          display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px;
+          display: inline-flex; align-items: center; gap: 6px; padding: 9px 12px;
           background: var(--bg-card); color: var(--text-secondary); border: 1px solid var(--border-subtle);
-          border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
+          border-radius: 10px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
           transition: all 0.15s ease;
         }
         .btn-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        .btn-action:disabled { opacity: 0.6; cursor: not-allowed; }
         .btn-action-warning:hover:not(:disabled) { border-color: var(--warning); color: var(--warning); }
+        .btn-action-sync:hover:not(:disabled) { border-color: var(--success); color: var(--success); }
+        .spinning { display: inline-block; animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+        .main-tabs {
+          display: flex; gap: 4px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 24px;
+        }
+        .main-tab {
+          background: transparent; border: none; padding: 12px 18px; color: var(--text-muted);
+          font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+          border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.15s ease;
+        }
+        .main-tab:hover { color: var(--text-secondary); }
+        .main-tab.main-tab-active { color: var(--accent); border-bottom-color: var(--accent); }
 
         .period-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
         .period-tab {
@@ -384,7 +454,7 @@ export default function RentabilidadView({
           .page { padding: 16px; }
           .header { flex-direction: column; align-items: stretch; }
           .header-title h1 { font-size: 22px; }
-          .header-actions { flex-direction: column; }
+          .header-actions { display: grid; grid-template-columns: repeat(2, 1fr); }
           .btn-action { justify-content: center; }
           .period-tabs { display: grid; grid-template-columns: repeat(3, 1fr); }
           .period-tab { justify-content: center; padding: 9px 6px; font-size: 12px; }
