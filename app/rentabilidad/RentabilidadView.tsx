@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import CargarAdsModal from '../components/CargarAdsModal'
+import GastoRapidoModal from '../components/GastoRapidoModal'
 import type { Calculo } from './page'
 
 type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
@@ -32,6 +33,7 @@ export default function RentabilidadView({
   period, labelPeriodo, labelComparacion, calcActual, calcPrev, iibbPct,
 }: Props) {
   const [adsModalOpen, setAdsModalOpen] = useState(false)
+  const [gastoModalOpen, setGastoModalOpen] = useState(false)
 
   const formatARS = (n: number) => {
     const abs = Math.abs(n)
@@ -92,7 +94,7 @@ export default function RentabilidadView({
           <button className="btn-action" onClick={() => setAdsModalOpen(true)}>
             <span>📊</span> Cargar gasto Ads
           </button>
-          <button className="btn-action btn-coming" disabled title="Próximamente (Entrega 3)">
+          <button className="btn-action btn-action-warning" onClick={() => setGastoModalOpen(true)}>
             <span>💸</span> Gasto rápido
           </button>
           <button className="btn-action btn-coming" disabled title="Próximamente (Entrega 4)">
@@ -176,7 +178,7 @@ export default function RentabilidadView({
             <div className="stat-detail">
               {calcActual.publicidad === 0
                 ? <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 cargar gastos</button>
-                : 'gastos cargados'
+                : <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 ver/editar</button>
               }
             </div>
           </div>
@@ -191,12 +193,13 @@ export default function RentabilidadView({
             <div className="stat-detail">cobertura {calcActual.coberturaCosto.toFixed(0)}%</div>
           </div>
           <div className="stat-cell">
-            <div className="stat-label">ROAS</div>
-            <div className={`stat-value ${calcActual.publicidad > 0 ? 'stat-roas' : 'stat-disabled'}`}>
-              {calcActual.publicidad > 0 ? `×${calcActual.roas.toFixed(1)}` : '—'}
-            </div>
+            <div className="stat-label">− GASTOS VARIOS</div>
+            <div className="stat-value stat-negative">−{formatARS(calcActual.gastosVarios)}</div>
             <div className="stat-detail">
-              {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin gasto cargado'}
+              {calcActual.gastosVarios === 0
+                ? <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 cargar gasto</button>
+                : <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 ver/editar</button>
+              }
             </div>
           </div>
         </div>
@@ -233,9 +236,19 @@ export default function RentabilidadView({
           <div className="mini-value">{calcActual.mejorDiaMonto > 0 ? formatARS(calcActual.mejorDiaMonto) : '—'}</div>
           <div className="mini-detail">{mejorDiaFormatted}</div>
         </div>
+        <div className="mini-card">
+          <div className="mini-label">📈 ROAS</div>
+          <div className={`mini-value ${calcActual.publicidad > 0 ? 'mini-roas' : 'mini-disabled'}`}>
+            {calcActual.publicidad > 0 ? `×${calcActual.roas.toFixed(1)}` : '—'}
+          </div>
+          <div className="mini-detail">
+            {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin gasto cargado'}
+          </div>
+        </div>
       </div>
 
       {adsModalOpen && <CargarAdsModal onClose={() => setAdsModalOpen(false)} />}
+      {gastoModalOpen && <GastoRapidoModal onClose={() => setGastoModalOpen(false)} />}
 
       <style jsx>{`
         .page { padding: 24px 40px 48px; max-width: 1500px; margin: 0 auto; }
@@ -250,6 +263,7 @@ export default function RentabilidadView({
           transition: all 0.15s ease;
         }
         .btn-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        .btn-action-warning:hover:not(:disabled) { border-color: var(--warning); color: var(--warning); }
         .btn-coming { opacity: 0.55; cursor: not-allowed; }
 
         .period-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
@@ -337,7 +351,6 @@ export default function RentabilidadView({
         .stat-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
         .stat-negative { color: var(--text-secondary); }
         .stat-disabled { opacity: 0.4; }
-        .stat-roas { color: var(--accent); }
         .stat-detail { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
         .link-btn {
           background: transparent; border: none; color: var(--accent); padding: 0;
@@ -345,16 +358,20 @@ export default function RentabilidadView({
         }
         .link-btn:hover { color: var(--accent-secondary); }
 
-        .mini-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+        .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
         .mini-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; }
         .mini-label { font-size: 11px; color: var(--text-muted); letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
-        .mini-value { font-size: 24px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
+        .mini-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
         .mini-fraction { font-size: 14px; color: var(--text-muted); font-weight: 500; }
         .mini-detail { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        .mini-roas { color: var(--accent); }
+        .mini-disabled { opacity: 0.4; }
 
+        @media (max-width: 1300px) {
+          .mini-cards { grid-template-columns: repeat(3, 1fr); }
+        }
         @media (max-width: 1100px) {
           .stats-grid { grid-template-columns: repeat(2, 1fr); }
-          .mini-cards { grid-template-columns: repeat(3, 1fr); }
         }
         @media (max-width: 768px) {
           .page { padding: 16px; }
@@ -374,7 +391,7 @@ export default function RentabilidadView({
           .stats-grid { grid-template-columns: 1fr 1fr; gap: 14px 16px; }
           .stat-value { font-size: 18px; }
           .mini-cards { grid-template-columns: repeat(2, 1fr); }
-          .mini-value { font-size: 20px; }
+          .mini-value { font-size: 18px; }
         }
       `}</style>
     </div>

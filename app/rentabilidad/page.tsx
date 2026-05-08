@@ -96,6 +96,7 @@ export type Calculo = {
   iibb: number
   costoMerca: number
   publicidad: number
+  gastosVarios: number
   ganancia: number
   margen: number
   ventas: number
@@ -128,6 +129,7 @@ function calcularRentabilidad(
   costsMap: Map<string, ItemCost>,
   iibbPct: number,
   publicidadAmount: number,
+  gastosVariosAmount: number,
   desde: Date,
   hasta: Date
 ): Calculo {
@@ -154,7 +156,7 @@ function calcularRentabilidad(
     costoMerca += costoConIva * (oi.quantity ?? 0)
   }
 
-  const ganancia = facturacion - comision - envios + flexBonif - iibb - costoMerca - publicidadAmount
+  const ganancia = facturacion - comision - envios + flexBonif - iibb - costoMerca - publicidadAmount - gastosVariosAmount
   const margen = facturacion > 0 ? (ganancia / facturacion) * 100 : 0
 
   const ventas = paid.length
@@ -185,11 +187,11 @@ function calcularRentabilidad(
 
   const coberturaCosto = totalItemsVendidos > 0 ? (itemsConCosto / totalItemsVendidos) * 100 : 0
   const comisionPct = facturacion > 0 ? (comision / facturacion) * 100 : 0
-  // ROAS = Facturación / Inversión en publicidad
   const roas = publicidadAmount > 0 ? facturacion / publicidadAmount : 0
 
   return {
-    facturacion, comision, envios, flexBonif, iibb, costoMerca, publicidad: publicidadAmount,
+    facturacion, comision, envios, flexBonif, iibb, costoMerca,
+    publicidad: publicidadAmount, gastosVarios: gastosVariosAmount,
     ganancia, margen,
     ventas, unidades, ticketPromedio,
     envioCount, flexCount,
@@ -265,6 +267,20 @@ async function fetchAdsTotal(supabase: any, desde: Date, hasta: Date): Promise<n
   return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
 }
 
+async function fetchQuickExpensesTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
+  const desdeStr = diaArgentinaFromISO(desde.toISOString())
+  const hastaStr = diaArgentinaFromISO(hasta.toISOString())
+
+  const { data } = await supabase
+    .from('quick_expenses')
+    .select('amount')
+    .gte('date', desdeStr)
+    .lte('date', hastaStr)
+
+  if (!data) return 0
+  return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
+}
+
 // =============================================================================
 // PÁGINA SERVER COMPONENT
 // =============================================================================
@@ -278,7 +294,6 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // === Cálculo de rangos ===
   let desdeActual: Date
   let hastaActual: Date
   let desdePrev: Date
@@ -314,7 +329,6 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     labelComparacion = 'vs ayer'
   }
 
-  // === IIBB activo ===
   const { data: taxRow } = await supabase
     .from('tax_config')
     .select('percentage')
@@ -325,20 +339,21 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     .maybeSingle()
   const iibbPct = taxRow?.percentage != null ? Number(taxRow.percentage) : 5.0
 
-  // === Datos en paralelo (orders + ads, ambos períodos) ===
-  const [actual, previo, publicidadActual, publicidadPrev] = await Promise.all([
+  const [actual, previo, publicidadActual, publicidadPrev, gastosActual, gastosPrev] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
     fetchAdsTotal(supabase, desdeActual, hastaActual),
     fetchAdsTotal(supabase, desdePrev, hastaPrev),
+    fetchQuickExpensesTotal(supabase, desdeActual, hastaActual),
+    fetchQuickExpensesTotal(supabase, desdePrev, hastaPrev),
   ])
 
   const calcActual = calcularRentabilidad(
-    actual.orders, actual.orderItems, actual.costsMap, iibbPct, publicidadActual,
+    actual.orders, actual.orderItems, actual.costsMap, iibbPct, publicidadActual, gastosActual,
     desdeActual, hastaActual
   )
   const calcPrev = calcularRentabilidad(
-    previo.orders, previo.orderItems, previo.costsMap, iibbPct, publicidadPrev,
+    previo.orders, previo.orderItems, previo.costsMap, iibbPct, publicidadPrev, gastosPrev,
     desdePrev, hastaPrev
   )
 
