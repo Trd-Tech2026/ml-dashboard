@@ -5,25 +5,48 @@ import CollapsibleSection from '../../components/CollapsibleSection'
 
 export const dynamic = 'force-dynamic'
 
+const TZ = 'America/Argentina/Buenos_Aires'
+
 type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
 
 type Props = {
   searchParams: Promise<{ rango?: string }>
 }
 
+// Devuelve el ISO del primer día del mes actual en zona Argentina
+function inicioMesArgentinaISO(): string {
+  const ahora = new Date()
+  const fechaAR = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(ahora)
+  const [year, month] = fechaAR.split('-')
+  return new Date(`${year}-${month}-01T00:00:00-03:00`).toISOString()
+}
+
 export default async function Historicas({ searchParams }: Props) {
   const params = await searchParams
   const rango = params.rango ?? '90'
-  const dias = parseInt(rango, 10) || 90
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  const desde = new Date()
-  desde.setDate(desde.getDate() - dias)
-  const desdeISO = desde.toISOString()
+  // === Cálculo del rango ===
+  // 'mes' → desde el día 1 del mes actual (zona AR) hasta ahora
+  // '7' / '90' → últimos N días corridos
+  let desdeISO: string
+  if (rango === 'mes') {
+    desdeISO = inicioMesArgentinaISO()
+  } else {
+    const dias = parseInt(rango, 10) || 90
+    const desde = new Date()
+    desde.setDate(desde.getDate() - dias)
+    desdeISO = desde.toISOString()
+  }
 
   const todasOrdenes: { status: string; total_amount: number; shipping_logistic_type: string | null }[] = []
   let from = 0
@@ -110,10 +133,18 @@ export default async function Historicas({ searchParams }: Props) {
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
+  // Nombre del mes actual capitalizado para el botón / subtítulo
+  const ahoraAR = new Date()
+  const mesActualNombre = ahoraAR.toLocaleDateString('es-AR', {
+    month: 'long',
+    timeZone: TZ,
+  })
+  const mesCapitalizado = mesActualNombre.charAt(0).toUpperCase() + mesActualNombre.slice(1)
+
   const rangos = [
-    { value: '7', label: '7 días', labelMobile: '7d' },
-    { value: '30', label: '30 días', labelMobile: '30d' },
-    { value: '90', label: '90 días', labelMobile: '90d' },
+    { value: '7', label: 'Últimos 7 días', labelMobile: '7d' },
+    { value: 'mes', label: `Mes en curso (${mesCapitalizado})`, labelMobile: 'Mes' },
+    { value: '90', label: 'Últimos 90 días', labelMobile: '90d' },
   ]
 
   const cards = [
@@ -146,7 +177,7 @@ export default async function Historicas({ searchParams }: Props) {
               href={`/ventas/historicas?rango=${r.value}`}
               className={`filtro ${activo ? 'activo' : ''}`}
             >
-              <span className="label-desktop">Últimos {r.label}</span>
+              <span className="label-desktop">{r.label}</span>
               <span className="label-mobile">{r.labelMobile}</span>
             </Link>
           )
