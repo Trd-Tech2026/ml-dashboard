@@ -729,7 +729,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
           color: var(--text-primary);
           line-height: 1;
           font-variant-numeric: tabular-nums;
-          background: linear-gradient(135deg, #c084fc 0%, #f472b6 100%);
+          background: linear-gradient(135deg, #00d9ff 0%, #0044ff 100%);
           -webkit-background-clip: text;
           background-clip: text;
           -webkit-text-fill-color: transparent;
