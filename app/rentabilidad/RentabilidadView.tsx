@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import CargarAdsModal from '../components/CargarAdsModal'
 import GastoRapidoModal from '../components/GastoRapidoModal'
+import ConfigModal from '../components/ConfigModal'
 import type { Calculo } from './page'
 
 type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
@@ -34,6 +35,7 @@ export default function RentabilidadView({
 }: Props) {
   const [adsModalOpen, setAdsModalOpen] = useState(false)
   const [gastoModalOpen, setGastoModalOpen] = useState(false)
+  const [configModalOpen, setConfigModalOpen] = useState(false)
 
   const formatARS = (n: number) => {
     const abs = Math.abs(n)
@@ -97,7 +99,7 @@ export default function RentabilidadView({
           <button className="btn-action btn-action-warning" onClick={() => setGastoModalOpen(true)}>
             <span>💸</span> Gasto rápido
           </button>
-          <button className="btn-action btn-coming" disabled title="Próximamente (Entrega 4)">
+          <button className="btn-action" onClick={() => setConfigModalOpen(true)}>
             <span>⚙️</span> Config
           </button>
         </div>
@@ -119,7 +121,6 @@ export default function RentabilidadView({
         })}
       </div>
 
-      {/* HERO CARD GANANCIA */}
       <div className={`hero ${calcActual.ganancia >= 0 ? 'hero-positive' : 'hero-negative'}`}>
         <div className="hero-bg">
           <div className="hero-orb orb-1" />
@@ -185,12 +186,20 @@ export default function RentabilidadView({
           <div className="stat-cell">
             <div className="stat-label">− IIBB ({iibbPct.toFixed(1)}%)</div>
             <div className="stat-value stat-negative">−{formatARS(calcActual.iibb)}</div>
-            <div className="stat-detail">conv. multilateral</div>
+            <div className="stat-detail">
+              <button className="link-btn" onClick={() => setConfigModalOpen(true)}>⚙️ editar %</button>
+            </div>
           </div>
           <div className="stat-cell">
             <div className="stat-label">− COSTO MERCA</div>
             <div className="stat-value stat-negative">−{formatARS(calcActual.costoMerca)}</div>
-            <div className="stat-detail">cobertura {calcActual.coberturaCosto.toFixed(0)}%</div>
+            <div className="stat-detail">
+              {calcActual.coberturaCosto < 100 ? (
+                <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
+                  cobertura {calcActual.coberturaCosto.toFixed(0)}%
+                </button>
+              ) : `cobertura 100%`}
+            </div>
           </div>
           <div className="stat-cell">
             <div className="stat-label">− GASTOS VARIOS</div>
@@ -205,7 +214,6 @@ export default function RentabilidadView({
         </div>
       </div>
 
-      {/* MINI CARDS */}
       <div className="mini-cards">
         <div className="mini-card">
           <div className="mini-label">🛒 VENTAS</div>
@@ -249,6 +257,7 @@ export default function RentabilidadView({
 
       {adsModalOpen && <CargarAdsModal onClose={() => setAdsModalOpen(false)} />}
       {gastoModalOpen && <GastoRapidoModal onClose={() => setGastoModalOpen(false)} />}
+      {configModalOpen && <ConfigModal onClose={() => setConfigModalOpen(false)} />}
 
       <style jsx>{`
         .page { padding: 24px 40px 48px; max-width: 1500px; margin: 0 auto; }
@@ -264,7 +273,6 @@ export default function RentabilidadView({
         }
         .btn-action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
         .btn-action-warning:hover:not(:disabled) { border-color: var(--warning); color: var(--warning); }
-        .btn-coming { opacity: 0.55; cursor: not-allowed; }
 
         .period-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
         .period-tab {
@@ -350,7 +358,6 @@ export default function RentabilidadView({
         .stat-label { font-size: 10px; color: var(--text-muted); letter-spacing: 1px; font-weight: 600; margin-bottom: 4px; }
         .stat-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
         .stat-negative { color: var(--text-secondary); }
-        .stat-disabled { opacity: 0.4; }
         .stat-detail { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
         .link-btn {
           background: transparent; border: none; color: var(--accent); padding: 0;
