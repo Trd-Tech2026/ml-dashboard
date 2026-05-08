@@ -9,6 +9,8 @@ const TZ = 'America/Argentina/Buenos_Aires'
 
 type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
 
+type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
+
 function inicioDiaArgentinaISO(): string {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
@@ -20,6 +22,16 @@ function inicioDiaArgentinaISO(): string {
   return new Date(`${fechaAR}T00:00:00-03:00`).toISOString()
 }
 
+function calcCambio(actual: number, previo: number): Cambio {
+  if (previo === 0) {
+    if (actual === 0) return { pct: 0, trend: 'flat' }
+    return null
+  }
+  const pct = ((actual - previo) / previo) * 100
+  if (Math.abs(pct) < 0.5) return { pct: 0, trend: 'flat' }
+  return { pct, trend: pct > 0 ? 'up' : 'down' }
+}
+
 export default async function Hoy() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -28,6 +40,7 @@ export default async function Hoy() {
 
   const inicioDiaISO = inicioDiaArgentinaISO()
 
+  // === Rango HOY: desde inicio del día hasta ahora ===
   const { data: ordenesRaw } = await supabase
     .from('orders')
     .select(`
@@ -54,11 +67,38 @@ export default async function Hoy() {
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
+  // === Rango AYER mismo lapso (para comparativa) ===
+  const inicioHoyMs = new Date(inicioDiaISO).getTime()
+  const ahoraMs = Date.now()
+  const duracionMs = ahoraMs - inicioHoyMs
+
+  const inicioAyerMs = inicioHoyMs - 24 * 60 * 60 * 1000
+  const finAyerMs = inicioAyerMs + duracionMs
+
+  const inicioAyerISO = new Date(inicioAyerMs).toISOString()
+  const finAyerISO = new Date(finAyerMs).toISOString()
+
+  const { data: ayerRaw } = await supabase
+    .from('orders')
+    .select('status, total_amount')
+    .gte('date_created', inicioAyerISO)
+    .lt('date_created', finAyerISO)
+
+  const ayerOrdenes = (ayerRaw ?? []) as { status: string; total_amount: number }[]
+
+  // === Cálculos hoy ===
   const ventasPagadas = ordenes.filter(o => o.status === 'paid')
   const cancelaciones = ordenes.filter(o => o.status === 'cancelled')
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
+  // === Cálculos ayer (mismo lapso) ===
+  const ayerPagadas = ayerOrdenes.filter(o => o.status === 'paid')
+  const ayerCancelaciones = ayerOrdenes.filter(o => o.status === 'cancelled')
+  const ayerFacturacion = ayerPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
+  const ayerTicket = ayerPagadas.length > 0 ? ayerFacturacion / ayerPagadas.length : 0
+
+  // === Cálculos Full ===
   const ordenesFull = ordenes.filter(o => o.shipping_logistic_type === 'fulfillment')
   const ventasFullPagadas = ordenesFull.filter(o => o.status === 'paid')
   const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
@@ -75,11 +115,17 @@ export default async function Hoy() {
     timeZone: TZ,
   })
 
+  const labelComparacion = 'vs ayer'
+
   const cards = [
-    { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: 'var(--success)' },
-    { titulo: 'Facturación', valor: formatARS(facturacion), color: 'var(--info)' },
-    { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: 'var(--warning)' },
-    { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: 'var(--danger)' },
+    { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), color: 'var(--success)',
+      cambio: calcCambio(ventasPagadas.length, ayerPagadas.length) },
+    { titulo: 'Facturación', valor: formatARS(facturacion), color: 'var(--info)',
+      cambio: calcCambio(facturacion, ayerFacturacion) },
+    { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), color: 'var(--warning)',
+      cambio: calcCambio(ticketPromedio, ayerTicket) },
+    { titulo: 'Cancelaciones', valor: String(cancelaciones.length), color: 'var(--danger)',
+      cambio: calcCambio(cancelaciones.length, ayerCancelaciones.length), invertColor: true },
   ]
 
   const cardsFull = [
@@ -88,6 +134,19 @@ export default async function Hoy() {
     { titulo: 'Ticket promedio Full', valor: formatARS(ticketFull), color: 'var(--warning)' },
     { titulo: '% sobre ventas pagadas', valor: ventasPagadas.length === 0 ? '—' : `${porcentajeFull.toFixed(0)}%`, color: 'var(--success)' },
   ]
+
+  const renderCambio = (cambio: Cambio, invertColor?: boolean) => {
+    if (!cambio) return <p className="kpi-cambio cambio-flat">— sin datos previos</p>
+    const isGood = cambio.trend === 'flat' ? null : (cambio.trend === 'up') !== !!invertColor
+    const className =
+      cambio.trend === 'flat' ? 'cambio-flat' : (isGood ? 'cambio-good' : 'cambio-bad')
+    const arrow = cambio.trend === 'up' ? '↑' : cambio.trend === 'down' ? '↓' : '='
+    return (
+      <p className={`kpi-cambio ${className}`}>
+        {arrow} {Math.abs(cambio.pct).toFixed(0)}% {labelComparacion}
+      </p>
+    )
+  }
 
   return (
     <div className="page">
@@ -104,6 +163,7 @@ export default async function Hoy() {
           <div key={card.titulo} className="kpi-card" style={{ '--kpi-accent': card.color } as any}>
             <p className="kpi-titulo">{card.titulo}</p>
             <p className="kpi-valor">{card.valor}</p>
+            {renderCambio(card.cambio, card.invertColor)}
           </div>
         ))}
       </div>
@@ -162,6 +222,10 @@ export default async function Hoy() {
         .kpi-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-accent); opacity: 0.7; }
         .kpi-titulo { color: var(--text-muted); font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
         .kpi-valor { font-size: 26px; font-weight: 700; margin: 0; color: var(--text-primary); }
+        .kpi-cambio { font-size: 11px; margin: 8px 0 0; font-weight: 600; letter-spacing: 0.3px; }
+        .cambio-good { color: var(--success); }
+        .cambio-bad { color: var(--danger); }
+        .cambio-flat { color: var(--text-muted); }
         .tabla-container { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 14px; padding: 24px; }
         .empty { color: var(--text-muted); }
         .full-section { margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
@@ -178,6 +242,7 @@ export default async function Hoy() {
           .kpi-card { padding: 14px; }
           .kpi-titulo { font-size: 11px; }
           .kpi-valor { font-size: 18px; }
+          .kpi-cambio { font-size: 10px; }
           .tabla-container { padding: 16px; }
           .full-section { margin-top: 24px; padding-top: 20px; }
           .full-header h2 { font-size: 18px; }

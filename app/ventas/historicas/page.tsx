@@ -9,12 +9,13 @@ const TZ = 'America/Argentina/Buenos_Aires'
 
 type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
 
+type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
+
 type Props = {
   searchParams: Promise<{ rango?: string }>
 }
 
-// Devuelve el ISO del primer día del mes actual en zona Argentina
-function inicioMesArgentinaISO(): string {
+function inicioMesArgentinaISO(offsetMeses: number = 0): string {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ,
@@ -22,8 +23,44 @@ function inicioMesArgentinaISO(): string {
     month: '2-digit',
     day: '2-digit',
   }).format(ahora)
-  const [year, month] = fechaAR.split('-')
-  return new Date(`${year}-${month}-01T00:00:00-03:00`).toISOString()
+  const [yearStr, monthStr] = fechaAR.split('-')
+  let year = parseInt(yearStr, 10)
+  let month = parseInt(monthStr, 10) + offsetMeses
+  while (month <= 0) { month += 12; year -= 1 }
+  while (month > 12) { month -= 12; year += 1 }
+  const mm = String(month).padStart(2, '0')
+  return new Date(`${year}-${mm}-01T00:00:00-03:00`).toISOString()
+}
+
+function calcCambio(actual: number, previo: number): Cambio {
+  if (previo === 0) {
+    if (actual === 0) return { pct: 0, trend: 'flat' }
+    return null
+  }
+  const pct = ((actual - previo) / previo) * 100
+  if (Math.abs(pct) < 0.5) return { pct: 0, trend: 'flat' }
+  return { pct, trend: pct > 0 ? 'up' : 'down' }
+}
+
+async function fetchKpisRango(supabase: any, desdeISO: string, hastaISO?: string) {
+  const todasOrdenes: { status: string; total_amount: number; shipping_logistic_type: string | null }[] = []
+  let from = 0
+  const PAGE_SIZE = 1000
+  while (true) {
+    let q = supabase
+      .from('orders')
+      .select('status, total_amount, shipping_logistic_type')
+      .gte('date_created', desdeISO)
+    if (hastaISO) q = q.lt('date_created', hastaISO)
+    q = q.range(from, from + PAGE_SIZE - 1)
+
+    const { data, error } = await q
+    if (error || !data || data.length === 0) break
+    todasOrdenes.push(...(data as any[]))
+    if (data.length < PAGE_SIZE) break
+    from += PAGE_SIZE
+  }
+  return todasOrdenes
 }
 
 export default async function Historicas({ searchParams }: Props) {
@@ -35,35 +72,49 @@ export default async function Historicas({ searchParams }: Props) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // === Cálculo del rango ===
-  // 'mes' → desde el día 1 del mes actual (zona AR) hasta ahora
-  // '7' / '90' → últimos N días corridos
+  // === Cálculo del rango actual ===
   let desdeISO: string
+  let hastaISOActual: string | undefined = undefined
+  let desdePreviaISO: string
+  let hastaPreviaISO: string
+  let labelComparacion: string
+
   if (rango === 'mes') {
-    desdeISO = inicioMesArgentinaISO()
+    desdeISO = inicioMesArgentinaISO(0)
+    hastaISOActual = undefined // hasta ahora
+
+    // Periodo previo: mismo lapso del mes anterior
+    const inicioMesActualMs = new Date(desdeISO).getTime()
+    const ahoraMs = Date.now()
+    const duracionMs = ahoraMs - inicioMesActualMs
+
+    desdePreviaISO = inicioMesArgentinaISO(-1)
+    hastaPreviaISO = new Date(new Date(desdePreviaISO).getTime() + duracionMs).toISOString()
+    labelComparacion = 'vs mes anterior'
   } else {
     const dias = parseInt(rango, 10) || 90
     const desde = new Date()
     desde.setDate(desde.getDate() - dias)
     desdeISO = desde.toISOString()
+    hastaISOActual = undefined
+
+    // Periodo previo: el mismo lapso anterior
+    const desdePrev = new Date()
+    desdePrev.setDate(desdePrev.getDate() - dias * 2)
+    const hastaPrev = new Date()
+    hastaPrev.setDate(hastaPrev.getDate() - dias)
+    desdePreviaISO = desdePrev.toISOString()
+    hastaPreviaISO = hastaPrev.toISOString()
+    labelComparacion = `vs ${dias} días previos`
   }
 
-  const todasOrdenes: { status: string; total_amount: number; shipping_logistic_type: string | null }[] = []
-  let from = 0
-  const PAGE_SIZE = 1000
-  while (true) {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('status, total_amount, shipping_logistic_type')
-      .gte('date_created', desdeISO)
-      .range(from, from + PAGE_SIZE - 1)
+  // === Traer datos en paralelo ===
+  const [todasOrdenes, prevOrdenes] = await Promise.all([
+    fetchKpisRango(supabase, desdeISO, hastaISOActual),
+    fetchKpisRango(supabase, desdePreviaISO, hastaPreviaISO),
+  ])
 
-    if (error || !data || data.length === 0) break
-    todasOrdenes.push(...(data as { status: string; total_amount: number; shipping_logistic_type: string | null }[]))
-    if (data.length < PAGE_SIZE) break
-    from += PAGE_SIZE
-  }
-
+  // === Cálculos rango actual ===
   const ventasPagadas = todasOrdenes.filter(o => o.status === 'paid')
   const cancelaciones = todasOrdenes.filter(o => o.status === 'cancelled')
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
@@ -77,7 +128,14 @@ export default async function Historicas({ searchParams }: Props) {
     ? (ventasFullPagadas.length / ventasPagadas.length) * 100
     : 0
 
-  const { data: recientesRaw } = await supabase
+  // === Cálculos período previo (para comparativa) ===
+  const prevPagadas = prevOrdenes.filter(o => o.status === 'paid')
+  const prevCancelaciones = prevOrdenes.filter(o => o.status === 'cancelled')
+  const prevFacturacion = prevPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
+  const prevTicket = prevPagadas.length > 0 ? prevFacturacion / prevPagadas.length : 0
+
+  // === Tablas ===
+  let recientesQuery: any = supabase
     .from('orders')
     .select(`
       order_id, status, total_amount, currency, buyer_nickname, date_created,
@@ -85,6 +143,8 @@ export default async function Historicas({ searchParams }: Props) {
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', desdeISO)
+  if (hastaISOActual) recientesQuery = recientesQuery.lt('date_created', hastaISOActual)
+  const { data: recientesRaw } = await recientesQuery
     .order('date_created', { ascending: false })
     .limit(100)
 
@@ -103,7 +163,7 @@ export default async function Historicas({ searchParams }: Props) {
     items: Array.isArray(o.order_items) ? o.order_items : [],
   }))
 
-  const { data: recientesFullRaw } = await supabase
+  let recientesFullQuery: any = supabase
     .from('orders')
     .select(`
       order_id, status, total_amount, currency, buyer_nickname, date_created,
@@ -112,6 +172,8 @@ export default async function Historicas({ searchParams }: Props) {
     `)
     .gte('date_created', desdeISO)
     .eq('shipping_logistic_type', 'fulfillment')
+  if (hastaISOActual) recientesFullQuery = recientesFullQuery.lt('date_created', hastaISOActual)
+  const { data: recientesFullRaw } = await recientesFullQuery
     .order('date_created', { ascending: false })
     .limit(100)
 
@@ -133,12 +195,9 @@ export default async function Historicas({ searchParams }: Props) {
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
-  // Nombre del mes actual capitalizado para el botón / subtítulo
+  // Nombre del mes actual capitalizado para el botón
   const ahoraAR = new Date()
-  const mesActualNombre = ahoraAR.toLocaleDateString('es-AR', {
-    month: 'long',
-    timeZone: TZ,
-  })
+  const mesActualNombre = ahoraAR.toLocaleDateString('es-AR', { month: 'long', timeZone: TZ })
   const mesCapitalizado = mesActualNombre.charAt(0).toUpperCase() + mesActualNombre.slice(1)
 
   const rangos = [
@@ -148,10 +207,14 @@ export default async function Historicas({ searchParams }: Props) {
   ]
 
   const cards = [
-    { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), kpiClass: 'kpi-success' },
-    { titulo: 'Facturación', valor: formatARS(facturacion), kpiClass: 'kpi-info' },
-    { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), kpiClass: 'kpi-warning' },
-    { titulo: 'Cancelaciones', valor: String(cancelaciones.length), kpiClass: 'kpi-danger' },
+    { titulo: 'Ventas pagadas', valor: String(ventasPagadas.length), kpiClass: 'kpi-success',
+      cambio: calcCambio(ventasPagadas.length, prevPagadas.length) },
+    { titulo: 'Facturación', valor: formatARS(facturacion), kpiClass: 'kpi-info',
+      cambio: calcCambio(facturacion, prevFacturacion) },
+    { titulo: 'Ticket promedio', valor: formatARS(ticketPromedio), kpiClass: 'kpi-warning',
+      cambio: calcCambio(ticketPromedio, prevTicket) },
+    { titulo: 'Cancelaciones', valor: String(cancelaciones.length), kpiClass: 'kpi-danger',
+      cambio: calcCambio(cancelaciones.length, prevCancelaciones.length), invertColor: true },
   ]
 
   const cardsFull = [
@@ -160,6 +223,19 @@ export default async function Historicas({ searchParams }: Props) {
     { titulo: 'Ticket promedio Full', valor: formatARS(ticketFull), kpiClass: 'kpi-warning' },
     { titulo: '% sobre ventas pagadas', valor: ventasPagadas.length === 0 ? '—' : `${porcentajeFull.toFixed(0)}%`, kpiClass: 'kpi-success' },
   ]
+
+  const renderCambio = (cambio: Cambio, invertColor?: boolean) => {
+    if (!cambio) return <p className="kpi-cambio cambio-flat">— sin datos previos</p>
+    const isGood = cambio.trend === 'flat' ? null : (cambio.trend === 'up') !== !!invertColor
+    const className =
+      cambio.trend === 'flat' ? 'cambio-flat' : (isGood ? 'cambio-good' : 'cambio-bad')
+    const arrow = cambio.trend === 'up' ? '↑' : cambio.trend === 'down' ? '↓' : '='
+    return (
+      <p className={`kpi-cambio ${className}`}>
+        {arrow} {Math.abs(cambio.pct).toFixed(0)}% {labelComparacion}
+      </p>
+    )
+  }
 
   return (
     <div className="page">
@@ -189,6 +265,7 @@ export default async function Historicas({ searchParams }: Props) {
           <div key={card.titulo} className={`kpi-card ${card.kpiClass}`}>
             <p className="kpi-titulo">{card.titulo}</p>
             <p className="kpi-valor">{card.valor}</p>
+            {renderCambio(card.cambio, card.invertColor)}
           </div>
         ))}
       </div>
@@ -257,6 +334,10 @@ export default async function Historicas({ searchParams }: Props) {
         .kpi-accent::before { background: var(--accent); }
         .kpi-titulo { color: var(--text-muted); font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
         .kpi-valor { font-size: 24px; font-weight: 700; margin: 0; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+        .kpi-cambio { font-size: 11px; margin: 8px 0 0; font-weight: 600; letter-spacing: 0.3px; }
+        .cambio-good { color: var(--success); }
+        .cambio-bad { color: var(--danger); }
+        .cambio-flat { color: var(--text-muted); }
         .tabla-container { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 20px 24px; }
         .empty { color: var(--text-muted); font-size: 13px; }
         .full-section { margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--border-subtle); }
@@ -276,6 +357,7 @@ export default async function Historicas({ searchParams }: Props) {
           .kpi-card { padding: 14px; }
           .kpi-titulo { font-size: 10px; margin-bottom: 6px; }
           .kpi-valor { font-size: 18px; }
+          .kpi-cambio { font-size: 10px; }
           .tabla-container { padding: 14px; }
           .full-section { margin-top: 24px; padding-top: 20px; }
           .full-header h2 { font-size: 18px; }
