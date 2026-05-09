@@ -277,7 +277,7 @@ async function fetchPeriodData(supabase: any, desdeISO: string, hastaISO: string
   return { orders, orderItems }
 }
 
-async function fetchAllItems(supabase: any) {
+async function fetchAllItems(supabase: any): Promise<ItemRow[]> {
   const items: ItemRow[] = []
   let from = 0
   const PAGE = 1000
@@ -288,6 +288,30 @@ async function fetchAllItems(supabase: any) {
       .range(from, from + PAGE - 1)
     if (error || !data || data.length === 0) break
     items.push(...(data as ItemRow[]))
+    if (data.length < PAGE) break
+    from += PAGE
+  }
+  return items
+}
+
+async function fetchAllManualItems(supabase: any): Promise<ItemRow[]> {
+  const items: ItemRow[] = []
+  let from = 0
+  const PAGE = 1000
+  while (true) {
+    const { data, error } = await supabase
+      .from('manual_items')
+      .select('seller_sku, cost, iva_rate')
+      .range(from, from + PAGE - 1)
+    if (error || !data || data.length === 0) break
+    for (const m of data as any[]) {
+      items.push({
+        item_id: `MANUAL-${m.seller_sku}`,
+        seller_sku: m.seller_sku,
+        cost: m.cost,
+        iva_rate: m.iva_rate,
+      })
+    }
     if (data.length < PAGE) break
     from += PAGE
   }
@@ -367,7 +391,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     labelPeriodo = 'hoy'; labelComparacion = 'vs ayer'
   }
 
-  const [actual, previo, publicidadActual, publicidadPrev, gastosActual, gastosPrev, allItems, manualComps] = await Promise.all([
+  const [actual, previo, publicidadActual, publicidadPrev, gastosActual, gastosPrev, itemsML, itemsManuales, manualComps] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
     fetchAdsTotal(supabase, desdeActual, hastaActual),
@@ -375,17 +399,20 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     fetchQuickExpensesTotal(supabase, desdeActual, hastaActual),
     fetchQuickExpensesTotal(supabase, desdePrev, hastaPrev),
     fetchAllItems(supabase),
+    fetchAllManualItems(supabase),
     fetchAllManualComponents(supabase),
   ])
 
-  // Construir mapas de items
+  // Combinar items de ML + items manuales
+  const allItems = [...itemsML, ...itemsManuales]
+
+  // Construir mapas
   const itemsBySku = new Map<string, ItemRow>()
   const itemIdToSeller = new Map<string, string | null>()
   const allItemCosts: ItemCostInfo[] = []
   for (const it of allItems) {
     itemIdToSeller.set(it.item_id, it.seller_sku)
     if (it.seller_sku) {
-      // Si hay duplicados de seller_sku, priorizar el que tenga cost
       const existing = itemsBySku.get(it.seller_sku)
       if (!existing || (it.cost && !existing.cost)) {
         itemsBySku.set(it.seller_sku, it)
