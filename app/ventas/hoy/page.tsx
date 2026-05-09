@@ -132,13 +132,22 @@ export default async function Hoy() {
     .gte('date_created', inicioDiaISO)
     .order('date_created', { ascending: false })
 
-  // Cargar todos los items + components
-  const [allItemsRes, manualCompsRes] = await Promise.all([
+  // Cargar items ML + items manuales + componentes
+  const [allItemsRes, manualItemsRes, manualCompsRes] = await Promise.all([
     supabase.from('items').select('item_id, seller_sku, cost, iva_rate'),
+    supabase.from('manual_items').select('seller_sku, cost, iva_rate'),
     supabase.from('product_components').select('parent_sku, component_sku, quantity'),
   ])
 
-  const allItems = (allItemsRes.data ?? []) as any[]
+  const allItemsML = (allItemsRes.data ?? []) as any[]
+  const itemsManuales = ((manualItemsRes.data ?? []) as any[]).map((m: any) => ({
+    item_id: `MANUAL-${m.seller_sku}`,
+    seller_sku: m.seller_sku,
+    cost: m.cost,
+    iva_rate: m.iva_rate,
+  }))
+  const allItems = [...allItemsML, ...itemsManuales]
+
   const itemsBySku = new Map<string, any>()
   const itemIdToSeller = new Map<string, string | null>()
   const allItemCosts: ItemCostInfo[] = []
@@ -194,7 +203,6 @@ export default async function Hoy() {
     }
   })
 
-  // Comparativa ayer
   const inicioHoyMs = new Date(inicioDiaISO).getTime()
   const ahoraMs = Date.now()
   const duracionMs = ahoraMs - inicioHoyMs
