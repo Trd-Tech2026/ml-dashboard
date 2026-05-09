@@ -25,7 +25,7 @@ export async function GET() {
 
   const items = comboItems ?? []
 
-  // 2. Agrupar por SKU (un combo puede tener varias publicaciones: catálogo + tradicional + cuotas)
+  // 2. Agrupar por SKU
   const groupsMap = new Map<string, any>()
   for (const item of items) {
     const sku = item.seller_sku
@@ -50,7 +50,7 @@ export async function GET() {
 
   const combos = Array.from(groupsMap.values())
 
-  // 3. Traer la configuración de componentes para todos los combos en un solo query
+  // 3. Traer la configuración de componentes
   const skus = combos.map(c => c.sku)
   let componentsBySku = new Map<string, any[]>()
 
@@ -75,7 +75,7 @@ export async function GET() {
     }
   }
 
-  // 4. Para cada componente, obtener su stock real (mínimo entre publicaciones del componente)
+  // 4. Para cada componente, obtener su stock real (de items O manual_items)
   const allComponentSkus = new Set<string>()
   for (const list of componentsBySku.values()) {
     for (const c of list) {
@@ -84,18 +84,34 @@ export async function GET() {
   }
 
   let componentItemsBySku = new Map<string, any[]>()
-  if (allComponentSkus.size > 0) {
-    const { data: compItems } = await supabase
-      .from('items')
-      .select('item_id, title, available_quantity, seller_sku, status, archived')
-      .in('seller_sku', Array.from(allComponentSkus))
-      .eq('archived', false)
+  let manualItemsBySku = new Map<string, any>()
 
-    for (const it of (compItems ?? [])) {
+  if (allComponentSkus.size > 0) {
+    const skusArr = Array.from(allComponentSkus)
+
+    // Buscar en items de ML Y en manual_items en paralelo
+    const [mlResult, manualResult] = await Promise.all([
+      supabase
+        .from('items')
+        .select('item_id, title, available_quantity, seller_sku, status, archived')
+        .in('seller_sku', skusArr)
+        .eq('archived', false),
+      supabase
+        .from('manual_items')
+        .select('seller_sku, title, available_quantity')
+        .in('seller_sku', skusArr),
+    ])
+
+    for (const it of (mlResult.data ?? [])) {
       if (!it.seller_sku) continue
       const list = componentItemsBySku.get(it.seller_sku) ?? []
       list.push(it)
       componentItemsBySku.set(it.seller_sku, list)
+    }
+
+    for (const m of (manualResult.data ?? [])) {
+      if (!m.seller_sku) continue
+      manualItemsBySku.set(m.seller_sku, m)
     }
   }
 
@@ -104,14 +120,29 @@ export async function GET() {
     const components = componentsBySku.get(combo.sku) ?? []
     const isConfigured = components.length > 0
 
-    // Enriquecer cada componente con su stock real
     const enrichedComponents = components.map(c => {
-      const items = componentItemsBySku.get(c.component_sku) ?? []
-      const minStock = items.length > 0
-        ? Math.min(...items.map(i => i.available_quantity))
-        : 0
-      const title = items[0]?.title ?? '(no encontrado)'
-      // Cuántos combos podemos armar con este componente
+      const mlItems = componentItemsBySku.get(c.component_sku) ?? []
+      const manualItem = manualItemsBySku.get(c.component_sku)
+
+      let title = '(no encontrado)'
+      let minStock = 0
+      let found = false
+      let isManual = false
+
+      if (mlItems.length > 0) {
+        // Es item de ML
+        title = mlItems[0].title
+        minStock = Math.min(...mlItems.map((i: any) => i.available_quantity))
+        found = true
+        isManual = false
+      } else if (manualItem) {
+        // Es item manual
+        title = manualItem.title
+        minStock = Number(manualItem.available_quantity ?? 0)
+        found = true
+        isManual = true
+      }
+
       const possibleCombos = c.quantity > 0 ? Math.floor(minStock / c.quantity) : 0
       return {
         component_sku: c.component_sku,
@@ -120,11 +151,11 @@ export async function GET() {
         notes: c.notes,
         component_stock: minStock,
         possible_combos: possibleCombos,
-        found: items.length > 0,
+        found,
+        is_manual: isManual,
       }
     })
 
-    // Stock real del combo = mínimo entre los possible_combos de cada componente
     let realStock: number | null = null
     if (isConfigured) {
       const validCombos = enrichedComponents.filter(c => c.found)
@@ -139,8 +170,8 @@ export async function GET() {
       sku: combo.sku,
       title: combo.title,
       thumbnail: combo.thumbnail,
-      ml_stock: combo.totalStock,  // lo que dice ML (mínimo entre publicaciones)
-      real_stock: realStock,        // calculado por componentes (null si no configurado)
+      ml_stock: combo.totalStock,
+      real_stock: realStock,
       total_sold: combo.totalSold,
       publications_count: combo.publications.length,
       currency: combo.currency,

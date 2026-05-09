@@ -76,6 +76,7 @@ type ComboComponent = {
   component_stock: number
   possible_combos: number
   found: boolean
+  is_manual?: boolean
 }
 
 type ComboPublication = {
@@ -113,6 +114,7 @@ type SkuSearchResult = {
   title: string
   thumbnail: string | null
   minStock: number
+  is_manual?: boolean
 }
 
 type CostInfo = { cost: number | null; iva_rate: number }
@@ -611,7 +613,6 @@ function ProductosView() {
               const isExpanded = expandedGroups.has(group.key)
               const groupSelected = group.items.every(i => selected.has(i.item_id))
               const groupPartial = !groupSelected && group.items.some(i => selected.has(i.item_id))
-              // Item representativo: el primero (ya viene ordenado por activo + más vendido)
               const rep = group.items[0]
               const isManual = !!rep.is_manual
               const ci = getCostInfo(rep)
@@ -1424,7 +1425,10 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
           {combo.components.map(c => (
             <div key={c.component_sku} className={`component-item ${!c.found ? 'missing' : ''}`}>
               <div className="component-info">
-                <div className="component-title">{c.component_title}</div>
+                <div className="component-title">
+                  {c.component_title}
+                  {c.is_manual ? <span className="src-badge src-manual">MANUAL</span> : c.found && <span className="src-badge src-ml">ML</span>}
+                </div>
                 <div className="component-sku">{c.component_sku} × {c.quantity}</div>
               </div>
               <div className="component-stock">
@@ -1470,6 +1474,9 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
         .cs-num { font-size: 16px; font-weight: 700; color: var(--text-primary); }
         .cs-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
         .missing-label { font-size: 10px; color: var(--danger); font-weight: 500; }
+        .src-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 8px; font-weight: 700; letter-spacing: 0.5px; vertical-align: middle; }
+        .src-ml { background: rgba(62, 229, 224, 0.12); color: var(--accent); border: 1px solid var(--border-medium); }
+        .src-manual { background: rgba(255, 167, 38, 0.12); color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.3); }
         .btn-configure { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; }
         .btn-configure:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(62, 229, 224, 0.3); }
       `}</style>
@@ -1478,8 +1485,8 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
 }
 
 function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => void; onSaved: () => void }) {
-  type EditComponent = { component_sku: string; component_title: string; quantity: number }
-  const [components, setComponents] = useState<EditComponent[]>(combo.components.map(c => ({ component_sku: c.component_sku, component_title: c.component_title, quantity: c.quantity })))
+  type EditComponent = { component_sku: string; component_title: string; quantity: number; is_manual?: boolean }
+  const [components, setComponents] = useState<EditComponent[]>(combo.components.map(c => ({ component_sku: c.component_sku, component_title: c.component_title, quantity: c.quantity, is_manual: c.is_manual })))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showSearch, setShowSearch] = useState(false)
@@ -1502,9 +1509,9 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
     return () => clearTimeout(timeout)
   }, [searchQuery, showSearch, combo.sku])
 
-  const addComponent = (sku: string, title: string) => {
+  const addComponent = (sku: string, title: string, isManual: boolean) => {
     if (components.some(c => c.component_sku === sku)) { setError(`El componente ${sku} ya está agregado`); return }
-    setComponents([...components, { component_sku: sku, component_title: title, quantity: 1 }])
+    setComponents([...components, { component_sku: sku, component_title: title, quantity: 1, is_manual: isManual }])
     setShowSearch(false); setSearchQuery(''); setSearchResults([]); setError(null)
   }
   const removeComponent = (sku: string) => setComponents(components.filter(c => c.component_sku !== sku))
@@ -1542,7 +1549,10 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
             {components.map(c => (
               <div key={c.component_sku} className="component-edit-row">
                 <div className="component-edit-info">
-                  <div className="component-edit-title">{c.component_title}</div>
+                  <div className="component-edit-title">
+                    {c.component_title}
+                    {c.is_manual ? <span className="src-badge src-manual">MANUAL</span> : <span className="src-badge src-ml">ML</span>}
+                  </div>
                   <div className="component-edit-sku">{c.component_sku}</div>
                 </div>
                 <div className="qty-input-wrap">
@@ -1567,10 +1577,13 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
                   {searchResults.map(r => {
                     const alreadyAdded = components.some(c => c.component_sku === r.sku)
                     return (
-                      <button key={r.sku} className={`search-result ${alreadyAdded ? 'already-added' : ''}`} onClick={() => !alreadyAdded && addComponent(r.sku, r.title)} disabled={alreadyAdded}>
-                        {r.thumbnail ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" /> : <div className="result-thumb-ph">📦</div>}
+                      <button key={r.sku} className={`search-result ${alreadyAdded ? 'already-added' : ''}`} onClick={() => !alreadyAdded && addComponent(r.sku, r.title, r.is_manual ?? false)} disabled={alreadyAdded}>
+                        {r.thumbnail ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" /> : <div className="result-thumb-ph">{r.is_manual ? '📋' : '📦'}</div>}
                         <div className="result-info">
-                          <div className="result-title">{r.title}</div>
+                          <div className="result-title">
+                            {r.title}
+                            {r.is_manual ? <span className="src-badge src-manual">MANUAL</span> : <span className="src-badge src-ml">ML</span>}
+                          </div>
                           <div className="result-sku">SKU: {r.sku} · Stock: {r.minStock}</div>
                         </div>
                         {alreadyAdded && <span className="already-tag">Ya agregado</span>}
@@ -1630,6 +1643,9 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         .result-title { font-size: 12px; color: var(--text-primary); line-height: 1.2; margin-bottom: 2px; }
         .result-sku { font-size: 10px; color: var(--text-muted); font-family: monospace; }
         .already-tag { font-size: 10px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 6px; }
+        .src-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font-size: 8px; font-weight: 700; letter-spacing: 0.5px; vertical-align: middle; }
+        .src-ml { background: rgba(62, 229, 224, 0.12); color: var(--accent); border: 1px solid var(--border-medium); }
+        .src-manual { background: rgba(255, 167, 38, 0.12); color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.3); }
         .error-msg { margin: 12px 24px 0; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
         .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
         .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
