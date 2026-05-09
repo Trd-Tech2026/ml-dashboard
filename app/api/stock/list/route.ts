@@ -57,8 +57,8 @@ export async function GET(request: Request) {
   const stockFilter = searchParams.get('stock') ?? 'all'
   const sort = searchParams.get('sort') ?? 'stock_desc'
   const archivedView = searchParams.get('archived') ?? 'false'
-  const groupBySku = searchParams.get('group') === 'true'
-  const includeManual = searchParams.get('manual') !== 'false' // default: incluir manuales
+  const groupBySku = searchParams.get('group') !== 'false'
+  const includeManual = searchParams.get('manual') !== 'false'
   const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10))
   const pageSize = Math.min(100, Math.max(10, parseInt(searchParams.get('pageSize') ?? '50', 10)))
 
@@ -86,10 +86,9 @@ export async function GET(request: Request) {
     return q
   }
 
-  // ===== Helper: traer productos manuales (con sus filtros básicos) =====
   const fetchManualItems = async (): Promise<Item[]> => {
     if (!includeManual) return []
-    if (archivedView === 'true') return [] // los manuales no se archivan
+    if (archivedView === 'true') return []
 
     let q = supabase
       .from('manual_items')
@@ -104,10 +103,7 @@ export async function GET(request: Request) {
     else if (stockFilter === 'critical') q = q.gt('available_quantity', 0).lt('available_quantity', 5)
     else if (stockFilter === 'normal') q = q.gte('available_quantity', 5)
 
-    // Status: los manuales no tienen status como ML; si se filtra por status específico, los excluimos.
     if (status !== 'all' && status !== 'active') return []
-
-    // Logística: si se filtra por logística específica, los manuales no aplican
     if (logistic !== 'all' && logistic !== 'null') return []
 
     const { data, error } = await q
@@ -136,14 +132,9 @@ export async function GET(request: Request) {
     }))
   }
 
-  // ===== Modo SIN agrupar =====
   if (!groupBySku) {
-    let query = supabase
-      .from('items')
-      .select(SELECT_FIELDS, { count: 'exact' })
-
+    let query = supabase.from('items').select(SELECT_FIELDS, { count: 'exact' })
     query = applyFilters(query)
-
     switch (sort) {
       case 'stock_asc': query = query.order('available_quantity', { ascending: true }); break
       case 'sold_desc': query = query.order('sold_quantity', { ascending: false }); break
@@ -152,79 +143,41 @@ export async function GET(request: Request) {
       case 'stock_desc':
       default: query = query.order('available_quantity', { ascending: false }); break
     }
-
     const from = (page - 1) * pageSize
     const to = from + pageSize - 1
     query = query.range(from, to)
-
-    const [{ data: mlData, error, count }, manualItems] = await Promise.all([
-      query,
-      fetchManualItems(),
-    ])
-
-    if (error) {
-      console.log('[stock/list] Error:', JSON.stringify(error))
-      return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-    }
-
+    const [{ data: mlData, error, count }, manualItems] = await Promise.all([query, fetchManualItems()])
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
     let allItems: Item[] = [...(mlData ?? []) as Item[], ...manualItems]
-
-    // Re-sort si hay manuales
-    if (manualItems.length > 0) {
-      allItems = sortItems(allItems, sort)
-    }
-
+    if (manualItems.length > 0) allItems = sortItems(allItems, sort)
     const kpis = await computeKpis(supabase, includeManual)
     const sync_state = await getSyncState(supabase)
-
     return NextResponse.json({
-      ok: true,
-      mode: 'flat',
-      items: allItems,
-      groups: [],
-      page,
-      pageSize,
-      totalFiltered: (count ?? 0) + manualItems.length,
-      totalGroups: 0,
-      archivedView,
-      kpis,
-      sync_state,
+      ok: true, mode: 'flat', items: allItems, groups: [],
+      page, pageSize, totalFiltered: (count ?? 0) + manualItems.length,
+      totalGroups: 0, archivedView, kpis, sync_state,
     })
   }
 
-  // ===== Modo AGRUPADO =====
-  let query = supabase
-    .from('items')
-    .select(SELECT_FIELDS)
-
+  let query = supabase.from('items').select(SELECT_FIELDS)
   query = applyFilters(query)
+  query = query.range(0, 4999)
 
-  const HARD_LIMIT = 5000
-  query = query.range(0, HARD_LIMIT - 1)
-
-  const [{ data, error }, manualItems] = await Promise.all([
-    query,
-    fetchManualItems(),
-  ])
-
-  if (error) {
-    console.log('[stock/list] Error:', JSON.stringify(error))
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
-  }
+  const [{ data, error }, manualItems] = await Promise.all([query, fetchManualItems()])
+  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
 
   const mlItems = ((data ?? []) as Item[])
   const allItems = [...mlItems, ...manualItems]
 
-  // Agrupar por SKU
   const map = new Map<string, Group>()
   for (const item of allItems) {
-    const key = item.seller_sku
-      ? `sku:${item.seller_sku}`
-      : `item:${item.item_id}`
+    const key = item.seller_sku ? `sku:${item.seller_sku}` : `item:${item.item_id}`
     const existing = map.get(key)
     if (existing) {
       existing.items.push(item)
-      existing.totalStock = Math.min(existing.totalStock, item.available_quantity)
+      // Stock: MÁXIMO entre publicaciones (mismo producto físico = mismo stock real)
+      existing.totalStock = Math.max(existing.totalStock, item.available_quantity ?? 0)
+      // Ventas: SUMA real entre todas las publicaciones del mismo SKU
       existing.totalSold += item.sold_quantity
       existing.minPrice = Math.min(existing.minPrice, item.price || 0)
       existing.maxPrice = Math.max(existing.maxPrice, item.price || 0)
@@ -234,23 +187,27 @@ export async function GET(request: Request) {
       if (item.date_created && (!existing.maxDateCreated || item.date_created > existing.maxDateCreated)) {
         existing.maxDateCreated = item.date_created
       }
-      // Si alguno es manual, el grupo es manual
       if (item.is_manual) existing.is_manual = true
     } else {
       map.set(key, {
-        key,
-        sku: item.seller_sku,
-        title: item.title,
-        thumbnail: item.thumbnail,
+        key, sku: item.seller_sku, title: item.title, thumbnail: item.thumbnail,
         items: [item],
-        totalStock: item.available_quantity,
-        totalSold: item.sold_quantity,
-        minPrice: item.price || 0,
-        maxPrice: item.price || 0,
-        currency: item.currency,
-        is_manual: !!item.is_manual,
-        maxLastUpdated: item.last_updated,
-        maxDateCreated: item.date_created ?? null,
+        totalStock: item.available_quantity ?? 0,
+        totalSold: item.sold_quantity ?? 0,
+        minPrice: item.price || 0, maxPrice: item.price || 0,
+        currency: item.currency, is_manual: !!item.is_manual,
+        maxLastUpdated: item.last_updated, maxDateCreated: item.date_created ?? null,
+      })
+    }
+  }
+
+  // Reordenar items dentro del grupo: activos primero, luego más vendidos
+  for (const group of Array.from(map.values())) {
+    if (group.items.length > 1) {
+      group.items.sort((a, b) => {
+        if (a.status === 'active' && b.status !== 'active') return -1
+        if (b.status === 'active' && a.status !== 'active') return 1
+        return (b.sold_quantity ?? 0) - (a.sold_quantity ?? 0)
       })
     }
   }
@@ -274,7 +231,6 @@ export async function GET(request: Request) {
 
   const totalGroups = groups.length
   const totalItemsFlat = allItems.length
-
   const from = (page - 1) * pageSize
   const to = from + pageSize
   const pagedGroups = groups.slice(from, to)
@@ -283,17 +239,9 @@ export async function GET(request: Request) {
   const sync_state = await getSyncState(supabase)
 
   return NextResponse.json({
-    ok: true,
-    mode: 'grouped',
-    items: [],
-    groups: pagedGroups,
-    page,
-    pageSize,
-    totalFiltered: totalItemsFlat,
-    totalGroups,
-    archivedView,
-    kpis,
-    sync_state,
+    ok: true, mode: 'grouped', items: [], groups: pagedGroups,
+    page, pageSize, totalFiltered: totalItemsFlat, totalGroups,
+    archivedView, kpis, sync_state,
   })
 }
 
@@ -312,39 +260,75 @@ function sortItems(items: Item[], sort: string): Item[] {
   }
 }
 
+// =============================================================
+// KPIs por SKU ÚNICO (no por publicaciones)
+// =============================================================
 async function computeKpis(supabase: any, includeManual: boolean) {
-  const baseKpi = () => supabase.from('items').select('item_id', { count: 'exact', head: true }).eq('archived', false)
-  const baseKpiSum = supabase.from('items').select('available_quantity').eq('archived', false)
+  type StockRow = { item_id: string; seller_sku: string | null; available_quantity: number }
+  const itemsForKpis: StockRow[] = []
+  let from = 0
+  const PAGE = 1000
+  while (true) {
+    const { data, error } = await supabase
+      .from('items')
+      .select('item_id, seller_sku, available_quantity')
+      .eq('archived', false)
+      .range(from, from + PAGE - 1)
+    if (error || !data || data.length === 0) break
+    itemsForKpis.push(...(data as StockRow[]))
+    if (data.length < PAGE) break
+    from += PAGE
+  }
 
-  const [totalRes, sinStockRes, criticoRes, stockSumRes, archivedRes, manualSumRes, manualCountRes, manualSinStockRes, manualCriticoRes] = await Promise.all([
-    baseKpi(),
-    baseKpi().eq('available_quantity', 0),
-    baseKpi().gt('available_quantity', 0).lt('available_quantity', 5),
-    baseKpiSum,
-    supabase.from('items').select('item_id', { count: 'exact', head: true }).eq('archived', true),
-    includeManual ? supabase.from('manual_items').select('available_quantity') : Promise.resolve({ data: [] }),
-    includeManual ? supabase.from('manual_items').select('seller_sku', { count: 'exact', head: true }) : Promise.resolve({ count: 0 }),
-    includeManual ? supabase.from('manual_items').select('seller_sku', { count: 'exact', head: true }).eq('available_quantity', 0) : Promise.resolve({ count: 0 }),
-    includeManual ? supabase.from('manual_items').select('seller_sku', { count: 'exact', head: true }).gt('available_quantity', 0).lt('available_quantity', 5) : Promise.resolve({ count: 0 }),
-  ])
+  // Agrupar por SKU único (o item_id si no tiene SKU). Stock = máximo entre publicaciones.
+  const stockByGroup = new Map<string, number>()
+  for (const item of itemsForKpis) {
+    const key = item.seller_sku ? `sku:${item.seller_sku}` : `item:${item.item_id}`
+    const current = stockByGroup.get(key)
+    const itemStock = item.available_quantity ?? 0
+    if (current === undefined) stockByGroup.set(key, itemStock)
+    else stockByGroup.set(key, Math.max(current, itemStock))
+  }
 
-  const stockTotalSum = (stockSumRes.data ?? []).reduce(
-    (acc: number, r: { available_quantity: number }) => acc + (r.available_quantity ?? 0),
-    0
-  )
+  let uniqueSkus = stockByGroup.size
+  let stockTotal = 0
+  let sinStockCount = 0
+  let criticoCount = 0
+  for (const stock of Array.from(stockByGroup.values())) {
+    stockTotal += stock
+    if (stock === 0) sinStockCount++
+    else if (stock < 5) criticoCount++
+  }
 
-  const manualStockSum = (manualSumRes.data ?? []).reduce(
-    (acc: number, r: { available_quantity: number }) => acc + (r.available_quantity ?? 0),
-    0
-  )
+  let manualCount = 0
+  let manualStock = 0
+  let manualSinStock = 0
+  let manualCritico = 0
+  if (includeManual) {
+    const { data } = await supabase.from('manual_items').select('available_quantity')
+    if (data) {
+      manualCount = data.length
+      for (const m of data as { available_quantity: number }[]) {
+        const q = m.available_quantity ?? 0
+        manualStock += q
+        if (q === 0) manualSinStock++
+        else if (q < 5) manualCritico++
+      }
+    }
+  }
+
+  const { count: archivedCount } = await supabase
+    .from('items')
+    .select('item_id', { count: 'exact', head: true })
+    .eq('archived', true)
 
   return {
-    total: (totalRes.count ?? 0) + (manualCountRes.count ?? 0),
-    sin_stock: (sinStockRes.count ?? 0) + (manualSinStockRes.count ?? 0),
-    critico: (criticoRes.count ?? 0) + (manualCriticoRes.count ?? 0),
-    stock_total: stockTotalSum + manualStockSum,
-    archived_count: archivedRes.count ?? 0,
-    manual_count: manualCountRes.count ?? 0,
+    total: uniqueSkus + manualCount,
+    sin_stock: sinStockCount + manualSinStock,
+    critico: criticoCount + manualCritico,
+    stock_total: stockTotal + manualStock,
+    archived_count: archivedCount ?? 0,
+    manual_count: manualCount,
   }
 }
 
