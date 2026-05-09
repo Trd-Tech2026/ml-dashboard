@@ -388,11 +388,21 @@ export default function RentabilidadView({
         .main-tab:hover { color: var(--text-secondary); }
         .main-tab.main-tab-active { color: #3ee5e0; border-bottom-color: #3ee5e0; }
 
-        .period-tabs { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+        /* PERIOD TABS estilo botón cyan TRDTECH */
+        .period-tabs {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 16px;
+          flex-wrap: wrap;
+        }
         .period-tab {
-          display: inline-flex; align-items: center; justify-content: center;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
           padding: 10px 22px;
-          border-radius: 10px; font-size: 13px; font-weight: 600;
+          border-radius: 10px;
+          font-size: 13px;
+          font-weight: 600;
           background: linear-gradient(135deg, #0d4d6e 0%, #1ca0c4 100%);
           color: #ffffff;
           border: 1px solid rgba(62, 229, 224, 0.4);
@@ -672,7 +682,7 @@ export default function RentabilidadView({
           .header-actions { display: grid; grid-template-columns: repeat(2, 1fr); }
           .btn-action { justify-content: center; }
           .period-tabs { display: grid; grid-template-columns: repeat(3, 1fr); }
-          .period-tab { justify-content: center; padding: 9px 6px; font-size: 12px; }
+          .period-tab { padding: 9px 6px; font-size: 12px; }
           .hero-trd { padding: 24px 20px; }
           .hero-row { flex-direction: column; }
           .hero-amount { font-size: 44px; }
