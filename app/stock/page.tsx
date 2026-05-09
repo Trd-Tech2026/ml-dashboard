@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import StockTabs from '../../components/StockTabs'
-// ===== Tipos =====
+
 type Item = {
   item_id: string
   title: string
@@ -117,7 +117,6 @@ type SkuSearchResult = {
 
 type CostInfo = { cost: number | null; iva_rate: number }
 
-// ===== Helpers =====
 function formatearPrecio(price: number, currency: string) {
   return new Intl.NumberFormat('es-AR', {
     style: 'currency',
@@ -164,28 +163,11 @@ function stockClass(qty: number): string {
   return ''
 }
 
-function itemsToFakeGroups(items: Item[]): Group[] {
-  return items.map(item => ({
-    key: item.item_id,
-    sku: item.seller_sku,
-    title: item.title,
-    thumbnail: item.thumbnail,
-    items: [item],
-    totalStock: item.available_quantity,
-    totalSold: item.sold_quantity,
-    minPrice: item.price,
-    maxPrice: item.price,
-    currency: item.currency,
-    is_manual: !!item.is_manual,
-  }))
-}
-
 function costMapKey(item: Item): string {
   if (item.is_manual && item.seller_sku) return `MANUAL:${item.seller_sku}`
   return item.item_id
 }
 
-// ===== Componente principal =====
 export default function StockPage() {
   return (
     <Suspense fallback={<div className="stock-page-fallback" />}>
@@ -202,26 +184,15 @@ function StockPageContent() {
   return (
     <div className="stock-page">
       <StockTabs />
-
       {activeTab === 'productos' ? <ProductosView /> : <CombosView />}
-
       <style jsx>{`
-        .stock-page {
-          padding: 24px 40px 48px;
-          max-width: 1400px;
-          margin: 0 auto;
-        }
-        @media (max-width: 768px) {
-          .stock-page { padding: 16px; }
-        }
+        .stock-page { padding: 24px 40px 48px; max-width: 1400px; margin: 0 auto; }
+        @media (max-width: 768px) { .stock-page { padding: 16px; } }
       `}</style>
     </div>
   )
 }
 
-// ============================================================
-// VISTA: PRODUCTOS
-// ============================================================
 function ProductosView() {
   const router = useRouter()
   const [data, setData] = useState<StockApiResponse | null>(null)
@@ -236,7 +207,6 @@ function ProductosView() {
   const [stockFilter, setStockFilter] = useState('all')
   const [sort, setSort] = useState('stock_desc')
   const [showArchived, setShowArchived] = useState(false)
-  const [groupBySku, setGroupBySku] = useState(true)
   const [page, setPage] = useState(1)
   const pageSize = 50
 
@@ -246,7 +216,6 @@ function ProductosView() {
   const [showManualModal, setShowManualModal] = useState(false)
   const [editingManualSku, setEditingManualSku] = useState<string | null>(null)
 
-  // ===== Modificación de costos =====
   const [editingCosts, setEditingCosts] = useState(false)
   const [costInfoMap, setCostInfoMap] = useState<Map<string, CostInfo>>(new Map())
   const [savingCostKey, setSavingCostKey] = useState<string | null>(null)
@@ -255,15 +224,10 @@ function ProductosView() {
   const fetchItems = useCallback(async () => {
     setLoading(true)
     const params = new URLSearchParams({
-      search,
-      status,
-      logistic,
-      stock: stockFilter,
-      sort,
+      search, status, logistic, stock: stockFilter, sort,
       archived: showArchived ? 'true' : 'false',
-      group: groupBySku ? 'true' : 'false',
-      page: String(page),
-      pageSize: String(pageSize),
+      group: 'true',
+      page: String(page), pageSize: String(pageSize),
     })
     try {
       const res = await fetch(`/api/stock/list?${params.toString()}`, { cache: 'no-store' })
@@ -274,20 +238,16 @@ function ProductosView() {
     } finally {
       setLoading(false)
     }
-  }, [search, status, logistic, stockFilter, sort, showArchived, groupBySku, page])
+  }, [search, status, logistic, stockFilter, sort, showArchived, page])
 
   useEffect(() => { fetchItems() }, [fetchItems])
-  useEffect(() => { setPage(1) }, [search, status, logistic, stockFilter, sort, showArchived, groupBySku])
+  useEffect(() => { setPage(1) }, [search, status, logistic, stockFilter, sort, showArchived])
   useEffect(() => { setSelected(new Set()) }, [showArchived])
 
-  // Después de cargar items, fetch cost-info para mostrar costos en tabla
   useEffect(() => {
     if (!data) return
-    const allItems: Item[] = data.mode === 'grouped'
-      ? (data.groups ?? []).flatMap(g => g.items)
-      : (data.items ?? [])
+    const allItems: Item[] = (data.groups ?? []).flatMap(g => g.items)
     if (allItems.length === 0) return
-
     const itemIds: string[] = []
     const sellerSkus: string[] = []
     for (const item of allItems) {
@@ -431,10 +391,7 @@ function ProductosView() {
       const res = await fetch('/api/stock/archive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item_ids: idsToArchive,
-          archived: archive,
-        }),
+        body: JSON.stringify({ item_ids: idsToArchive, archived: archive }),
       })
       const json = await res.json()
       if (!json.ok) {
@@ -478,15 +435,8 @@ function ProductosView() {
   const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0, archived_count: 0, manual_count: 0 }
   const totalFiltered = data?.totalFiltered ?? 0
   const totalGroups = data?.totalGroups ?? 0
-
-  const groups: Group[] = data?.mode === 'grouped'
-    ? (data?.groups ?? [])
-    : itemsToFakeGroups(data?.items ?? [])
-
-  const totalPages = data?.mode === 'grouped'
-    ? Math.max(1, Math.ceil(totalGroups / pageSize))
-    : Math.max(1, Math.ceil(totalFiltered / pageSize))
-
+  const groups: Group[] = data?.groups ?? []
+  const totalPages = Math.max(1, Math.ceil(totalGroups / pageSize))
   const totalItemsEnPagina = groups.reduce((acc, g) => acc + g.items.length, 0)
   const todosEnPaginaSeleccionados = totalItemsEnPagina > 0 &&
     groups.flatMap(g => g.items).every(i => selected.has(i.item_id))
@@ -516,8 +466,7 @@ function ProductosView() {
         </div>
         <div className="header-actions">
           <button className="btn-create-manual" onClick={() => { setEditingManualSku(null); setShowManualModal(true); }}>
-            <span>+</span>
-            <span>Producto manual</span>
+            <span>+</span><span>Producto manual</span>
           </button>
           <button
             className={`btn-edit-costs ${editingCosts ? 'btn-edit-costs-active' : ''}`}
@@ -547,7 +496,7 @@ function ProductosView() {
 
       <div className="kpis">
         <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
-          <div className="kpi-label">Productos</div>
+          <div className="kpi-label">Productos (SKUs únicos)</div>
           <div className="kpi-value">{kpis.total.toLocaleString('es-AR')}</div>
         </div>
         <div className="kpi" style={{ '--kpi-c': 'var(--success)' } as any}>
@@ -565,10 +514,6 @@ function ProductosView() {
       </div>
 
       <div className="top-toggles">
-        <label className="toggle">
-          <input type="checkbox" checked={groupBySku} onChange={(e) => setGroupBySku(e.target.checked)} />
-          <span>Agrupar por SKU</span>
-        </label>
         <label className="toggle">
           <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
           <span>Mostrar archivadas {kpis.archived_count > 0 && `(${kpis.archived_count})`}</span>
@@ -637,9 +582,7 @@ function ProductosView() {
       <div className="counter">
         {loading
           ? 'Cargando...'
-          : data?.mode === 'grouped'
-            ? `Mostrando ${groups.length} producto${groups.length === 1 ? '' : 's'} de ${totalGroups.toLocaleString('es-AR')} (${totalFiltered.toLocaleString('es-AR')} publicaciones${showArchived ? ' archivadas' : ''})`
-            : `Mostrando ${totalItemsEnPagina} de ${totalFiltered.toLocaleString('es-AR')} publicaciones${showArchived ? ' archivadas' : ''}`
+          : `Mostrando ${groups.length} producto${groups.length === 1 ? '' : 's'} de ${totalGroups.toLocaleString('es-AR')} (${totalFiltered.toLocaleString('es-AR')} publicaciones${showArchived ? ' archivadas' : ''})`
         }
       </div>
 
@@ -668,87 +611,15 @@ function ProductosView() {
               const isExpanded = expandedGroups.has(group.key)
               const groupSelected = group.items.every(i => selected.has(i.item_id))
               const groupPartial = !groupSelected && group.items.some(i => selected.has(i.item_id))
-              const single = group.items[0]
-              const isManual = !!single.is_manual
-
-              if (!isMulti) {
-                const ci = getCostInfo(single)
-                const key = costMapKey(single)
-                return (
-                  <tr key={group.key} className={`${stockClass(single.available_quantity)} ${selected.has(single.item_id) ? 'fila-selected' : ''} ${isManual ? 'fila-manual' : ''}`}>
-                    <td className="col-check">
-                      <input type="checkbox" checked={selected.has(single.item_id)} onChange={() => toggleSelect(single.item_id)} />
-                    </td>
-                    <td className="col-arrow"></td>
-                    <td>
-                      {isManual ? (
-                        <div className="thumb-placeholder thumb-manual">📋</div>
-                      ) : single.thumbnail
-                        ? <img src={single.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
-                        : <div className="thumb-placeholder">📦</div>
-                      }
-                    </td>
-                    <td className="td-title">
-                      <div className="title-text">
-                        {single.title}
-                        {isManual && <span className="badge-manual">MANUAL</span>}
-                      </div>
-                      {single.seller_sku
-                        ? <div className="sku">SKU: {single.seller_sku}</div>
-                        : <div className="sku-missing">Sin SKU</div>
-                      }
-                    </td>
-                    <td className="td-stock"><strong>{single.available_quantity}</strong></td>
-                    <td className="td-num">{isManual ? '—' : single.sold_quantity}</td>
-                    <CostCell
-                      item={single}
-                      costInfo={ci}
-                      editing={editingCosts}
-                      saving={savingCostKey === key}
-                      saved={savedRecentlyKey === key}
-                      onSave={(c, iva) => handleSaveCost(single, c, iva)}
-                    />
-                    <td className="td-num">
-                      {isManual
-                        ? <span className="text-dim">—</span>
-                        : formatearPrecio(single.price, single.currency)
-                      }
-                    </td>
-                    <td>
-                      {isManual ? (
-                        <span className="logistic-badge">Sin envío</span>
-                      ) : (
-                        <div className="logistic-badges">
-                          <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
-                          {single.is_flex && single.logistic_type !== 'self_service' && (
-                            <span className="logistic-badge logistic-flex">⚡ Flex</span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {isManual
-                        ? <span className="status-badge status-active">Manual</span>
-                        : <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
-                      }
-                    </td>
-                    <td>
-                      {isManual ? (
-                        <div className="manual-actions">
-                          <button className="btn-mini" onClick={() => handleEditManual(single.seller_sku!)} title="Editar">✏️</button>
-                          <button className="btn-mini btn-mini-danger" onClick={() => handleDeleteManual(single.seller_sku!, single.title)} title="Borrar">🗑️</button>
-                        </div>
-                      ) : single.permalink && (
-                        <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
-                      )}
-                    </td>
-                  </tr>
-                )
-              }
+              // Item representativo: el primero (ya viene ordenado por activo + más vendido)
+              const rep = group.items[0]
+              const isManual = !!rep.is_manual
+              const ci = getCostInfo(rep)
+              const key = costMapKey(rep)
 
               return (
                 <>
-                  <tr key={group.key} className={`group-row ${stockClass(group.totalStock)} ${groupSelected ? 'fila-selected' : ''}`}>
+                  <tr key={group.key} className={`${stockClass(group.totalStock)} ${groupSelected ? 'fila-selected' : ''} ${isManual ? 'fila-manual' : ''}`}>
                     <td className="col-check">
                       <input
                         type="checkbox"
@@ -758,28 +629,45 @@ function ProductosView() {
                       />
                     </td>
                     <td className="col-arrow">
-                      <button className="arrow-btn" onClick={() => toggleExpand(group.key)}>
-                        <span className={`arrow ${isExpanded ? 'arrow-open' : ''}`}>▶</span>
-                      </button>
+                      {isMulti ? (
+                        <button className="arrow-btn" onClick={() => toggleExpand(group.key)} title={`${group.items.length} publicaciones`}>
+                          <span className={`arrow ${isExpanded ? 'arrow-open' : ''}`}>▶</span>
+                        </button>
+                      ) : null}
                     </td>
                     <td>
-                      {group.thumbnail
+                      {isManual ? (
+                        <div className="thumb-placeholder thumb-manual">📋</div>
+                      ) : group.thumbnail
                         ? <img src={group.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
                         : <div className="thumb-placeholder">📦</div>
                       }
                     </td>
                     <td className="td-title">
-                      <div className="title-text">{group.title}</div>
-                      <div className="group-meta">
-                        <span className="sku">SKU: {group.sku}</span>
-                        <span className="badge-count">{group.items.length} publicaciones</span>
+                      <div className="title-text">
+                        {group.title}
+                        {isManual && <span className="badge-manual">MANUAL</span>}
+                        {isMulti && <span className="badge-count" title="Tiene varias publicaciones — click ▶ para verlas">{group.items.length} publ.</span>}
                       </div>
+                      {group.sku
+                        ? <div className="sku">SKU: {group.sku}</div>
+                        : <div className="sku-missing">Sin SKU</div>
+                      }
                     </td>
                     <td className="td-stock"><strong>{group.totalStock}</strong></td>
-                    <td className="td-num">{group.totalSold}</td>
-                    <td className="td-num"><span className="text-dim">—</span></td>
+                    <td className="td-num">{isManual ? '—' : group.totalSold}</td>
+                    <CostCell
+                      item={rep}
+                      costInfo={ci}
+                      editing={editingCosts}
+                      saving={savingCostKey === key}
+                      saved={savedRecentlyKey === key}
+                      onSave={(c, iva) => handleSaveCost(rep, c, iva)}
+                    />
                     <td className="td-num">
-                      {group.minPrice === group.maxPrice
+                      {isManual ? (
+                        <span className="text-dim">—</span>
+                      ) : group.minPrice === group.maxPrice
                         ? formatearPrecio(group.minPrice, group.currency)
                         : <span className="price-range">
                             {formatearPrecio(group.minPrice, group.currency)}
@@ -788,11 +676,36 @@ function ProductosView() {
                           </span>
                       }
                     </td>
-                    <td className="td-summary" colSpan={3}>
-                      <span className="summary-text">Click ▶ para ver publicaciones</span>
+                    <td>
+                      {isManual ? (
+                        <span className="logistic-badge">Sin envío</span>
+                      ) : (
+                        <div className="logistic-badges">
+                          <span className={`logistic-badge logistic-${rep.logistic_type ?? 'none'}`}>{logisticLabel(rep.logistic_type)}</span>
+                          {rep.is_flex && rep.logistic_type !== 'self_service' && (
+                            <span className="logistic-badge logistic-flex">⚡ Flex</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      {isManual
+                        ? <span className="status-badge status-active">Manual</span>
+                        : <span className={`status-badge status-${rep.status}`}>{statusLabel(rep.status)}</span>
+                      }
+                    </td>
+                    <td>
+                      {isManual ? (
+                        <div className="manual-actions">
+                          <button className="btn-mini" onClick={() => handleEditManual(rep.seller_sku!)} title="Editar">✏️</button>
+                          <button className="btn-mini btn-mini-danger" onClick={() => handleDeleteManual(rep.seller_sku!, rep.title)} title="Borrar">🗑️</button>
+                        </div>
+                      ) : rep.permalink && (
+                        <a href={rep.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
+                      )}
                     </td>
                   </tr>
-                  {isExpanded && group.items.map((item) => {
+                  {isMulti && isExpanded && group.items.map((item) => {
                     const ciChild = getCostInfo(item)
                     const keyChild = costMapKey(item)
                     return (
@@ -841,49 +754,53 @@ function ProductosView() {
         </table>
       </div>
 
-      {/* Cards mobile */}
       <div className="cards-mobile">
         {groups.map((group) => {
-          const single = group.items[0]
-          const isManual = !!single.is_manual
-          const isSelected = selected.has(single.item_id)
-          const ci = getCostInfo(single)
-          const key = costMapKey(single)
+          const rep = group.items[0]
+          const isManual = !!rep.is_manual
+          const isSelected = group.items.every(i => selected.has(i.item_id))
+          const isMulti = group.items.length > 1
+          const ci = getCostInfo(rep)
+          const key = costMapKey(rep)
           return (
-            <div key={group.key} className={`card-item ${stockClass(single.available_quantity)} ${isSelected ? 'card-selected' : ''} ${isManual ? 'card-manual' : ''}`}>
+            <div key={group.key} className={`card-item ${stockClass(group.totalStock)} ${isSelected ? 'card-selected' : ''} ${isManual ? 'card-manual' : ''}`}>
               <div className="card-top">
-                <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(single.item_id)} className="card-checkbox" />
+                <input type="checkbox" checked={isSelected} onChange={() => toggleSelectGroup(group)} className="card-checkbox" />
                 {isManual ? (
                   <div className="thumb-placeholder thumb-manual">📋</div>
-                ) : single.thumbnail
-                  ? <img src={single.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
+                ) : group.thumbnail
+                  ? <img src={group.thumbnail.replace('http://', 'https://')} alt="" className="thumb" />
                   : <div className="thumb-placeholder">📦</div>
                 }
                 <div className="card-info">
                   <div className="card-title">
-                    {single.title}
+                    {group.title}
                     {isManual && <span className="badge-manual">MANUAL</span>}
+                    {isMulti && <span className="badge-count">{group.items.length} publ.</span>}
                   </div>
-                  {single.seller_sku && <div className="sku">SKU: {single.seller_sku}</div>}
+                  {group.sku && <div className="sku">SKU: {group.sku}</div>}
                 </div>
               </div>
               <div className="card-stats">
-                <div><span className="stat-label">Stock</span> <strong>{single.available_quantity}</strong></div>
-                <div><span className="stat-label">Vendidos</span> {isManual ? '—' : single.sold_quantity}</div>
+                <div><span className="stat-label">Stock</span> <strong>{group.totalStock}</strong></div>
+                <div><span className="stat-label">Vendidos</span> {isManual ? '—' : group.totalSold}</div>
                 <div>
                   <span className="stat-label">Precio</span>{' '}
-                  {isManual ? '—' : formatearPrecio(single.price, single.currency)}
+                  {isManual ? '—' : group.minPrice === group.maxPrice
+                    ? formatearPrecio(group.minPrice, group.currency)
+                    : `${formatearPrecio(group.minPrice, group.currency)}–${formatearPrecio(group.maxPrice, group.currency)}`
+                  }
                 </div>
               </div>
               <div className="card-cost-row">
                 <span className="stat-label">Costo</span>
                 {editingCosts ? (
                   <CostCellMobile
-                    item={single}
+                    item={rep}
                     costInfo={ci}
                     saving={savingCostKey === key}
                     saved={savedRecentlyKey === key}
-                    onSave={(c, iva) => handleSaveCost(single, c, iva)}
+                    onSave={(c, iva) => handleSaveCost(rep, c, iva)}
                   />
                 ) : (
                   ci.cost != null ? (
@@ -896,15 +813,15 @@ function ProductosView() {
                   <>
                     <span className="status-badge status-active">Manual</span>
                     <div className="manual-actions">
-                      <button className="btn-mini" onClick={() => handleEditManual(single.seller_sku!)}>✏️ Editar</button>
-                      <button className="btn-mini btn-mini-danger" onClick={() => handleDeleteManual(single.seller_sku!, single.title)}>🗑️ Borrar</button>
+                      <button className="btn-mini" onClick={() => handleEditManual(rep.seller_sku!)}>✏️ Editar</button>
+                      <button className="btn-mini btn-mini-danger" onClick={() => handleDeleteManual(rep.seller_sku!, rep.title)}>🗑️ Borrar</button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <span className={`logistic-badge logistic-${single.logistic_type ?? 'none'}`}>{logisticLabel(single.logistic_type)}</span>
-                    <span className={`status-badge status-${single.status}`}>{statusLabel(single.status)}</span>
-                    {single.permalink && <a href={single.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
+                    <span className={`logistic-badge logistic-${rep.logistic_type ?? 'none'}`}>{logisticLabel(rep.logistic_type)}</span>
+                    <span className={`status-badge status-${rep.status}`}>{statusLabel(rep.status)}</span>
+                    {rep.permalink && <a href={rep.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>}
                   </>
                 )}
               </div>
@@ -953,11 +870,7 @@ function ProductosView() {
         .btn-refresh:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4); }
         .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
 
-        .edit-costs-banner {
-          display: flex; align-items: center; gap: 10px;
-          background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3);
-          border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; flex-wrap: wrap;
-        }
+        .edit-costs-banner { display: flex; align-items: center; gap: 10px; background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; flex-wrap: wrap; }
         .banner-icon { font-size: 18px; flex-shrink: 0; }
         .banner-text { flex: 1; font-size: 13px; color: var(--text-secondary); line-height: 1.5; min-width: 220px; }
         .banner-text strong { color: var(--warning); }
@@ -1001,7 +914,6 @@ function ProductosView() {
         .tabla tr.stock-low .td-stock strong { color: var(--warning); }
         .tabla tr.fila-selected { background: rgba(62, 229, 224, 0.08) !important; }
         .tabla tr.fila-manual { background: rgba(62, 229, 224, 0.04); }
-        .tabla tr.group-row { font-weight: 500; }
         .tabla tr.child-row { background: rgba(0, 0, 0, 0.18); font-size: 12px; }
         .tabla tr.child-row td { padding: 9px 16px; }
 
@@ -1022,12 +934,9 @@ function ProductosView() {
         .sku { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 2px; }
         .sku-missing { font-size: 11px; color: var(--text-dim); font-style: italic; margin-top: 2px; }
         .badge-manual { background: rgba(62, 229, 224, 0.15); color: var(--accent); padding: 2px 7px; border-radius: 6px; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; border: 1px solid var(--border-medium); }
-        .group-meta { display: flex; align-items: center; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
-        .badge-count { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; border: 1px solid var(--border-subtle); }
+        .badge-count { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; border: 1px solid var(--border-subtle); cursor: help; }
         .price-range { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
         .price-range small { color: var(--text-muted); margin: 0 2px; }
-        .td-summary { color: var(--text-muted); font-size: 11px; font-style: italic; }
-        .summary-text { opacity: 0.7; }
 
         .td-stock strong { font-size: 15px; color: var(--text-primary); }
         .td-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
@@ -1093,24 +1002,12 @@ function ProductosView() {
   )
 }
 
-// ============================================================
-// CELDA DE COSTO (con modo lectura y modo edición)
-// ============================================================
-function CostCell({
-  item, costInfo, editing, saving, saved, onSave,
-}: {
-  item: Item
-  costInfo: CostInfo
-  editing: boolean
-  saving: boolean
-  saved: boolean
+function CostCell({ item, costInfo, editing, saving, saved, onSave }: {
+  item: Item; costInfo: CostInfo; editing: boolean; saving: boolean; saved: boolean;
   onSave: (cost: number | null, ivaRate: number) => void
 }) {
   const [costInput, setCostInput] = useState(costInfo.cost != null ? String(costInfo.cost) : '')
-
-  useEffect(() => {
-    setCostInput(costInfo.cost != null ? String(costInfo.cost) : '')
-  }, [costInfo.cost])
+  useEffect(() => { setCostInput(costInfo.cost != null ? String(costInfo.cost) : '') }, [costInfo.cost])
 
   const trySave = (newCostStr: string, newIva: number) => {
     const trimmed = newCostStr.trim()
@@ -1125,7 +1022,7 @@ function CostCell({
       <td className="td-num td-cost">
         {costInfo.cost != null ? (
           <>
-            <div className="cost-value">{formatearPrecio(costInfo.cost, 'ARS')}</div>
+            <div className="cost-value">{new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(costInfo.cost)}</div>
             <div className="cost-iva-hint">+ {costInfo.iva_rate}% IVA</div>
           </>
         ) : <span className="text-dim">—</span>}
@@ -1145,10 +1042,7 @@ function CostCell({
         <div className="cost-input-row">
           <span className="cost-prefix">$</span>
           <input
-            type="number"
-            min={0}
-            step={0.01}
-            value={costInput}
+            type="number" min={0} step={0.01} value={costInput}
             onChange={e => setCostInput(e.target.value)}
             onBlur={() => trySave(costInput, costInfo.iva_rate)}
             onKeyDown={e => {
@@ -1158,19 +1052,12 @@ function CostCell({
                 ;(e.target as HTMLInputElement).blur()
               }
             }}
-            placeholder="—"
-            disabled={saving}
-            className="cost-input"
+            placeholder="—" disabled={saving} className="cost-input"
           />
           {saving && <span className="cost-state">⏳</span>}
           {!saving && saved && <span className="cost-state cost-saved">✓</span>}
         </div>
-        <select
-          value={String(costInfo.iva_rate)}
-          onChange={e => trySave(costInput, parseFloat(e.target.value))}
-          disabled={saving}
-          className="cost-iva-select"
-        >
+        <select value={String(costInfo.iva_rate)} onChange={e => trySave(costInput, parseFloat(e.target.value))} disabled={saving} className="cost-iva-select">
           <option value="21">21% IVA</option>
           <option value="10.5">10.5% IVA</option>
           <option value="27">27% IVA</option>
@@ -1195,21 +1082,12 @@ function CostCell({
   )
 }
 
-// Versión mobile (sin <td>)
-function CostCellMobile({
-  item, costInfo, saving, saved, onSave,
-}: {
-  item: Item
-  costInfo: CostInfo
-  saving: boolean
-  saved: boolean
+function CostCellMobile({ item, costInfo, saving, saved, onSave }: {
+  item: Item; costInfo: CostInfo; saving: boolean; saved: boolean;
   onSave: (cost: number | null, ivaRate: number) => void
 }) {
   const [costInput, setCostInput] = useState(costInfo.cost != null ? String(costInfo.cost) : '')
-
-  useEffect(() => {
-    setCostInput(costInfo.cost != null ? String(costInfo.cost) : '')
-  }, [costInfo.cost])
+  useEffect(() => { setCostInput(costInfo.cost != null ? String(costInfo.cost) : '') }, [costInfo.cost])
 
   const trySave = (newCostStr: string, newIva: number) => {
     const trimmed = newCostStr.trim()
@@ -1223,21 +1101,8 @@ function CostCellMobile({
     <div className="cost-mobile-wrap">
       <div className="cost-mobile-row">
         <span className="cost-prefix">$</span>
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          value={costInput}
-          onChange={e => setCostInput(e.target.value)}
-          onBlur={() => trySave(costInput, costInfo.iva_rate)}
-          placeholder="Sin costo"
-          disabled={saving}
-        />
-        <select
-          value={String(costInfo.iva_rate)}
-          onChange={e => trySave(costInput, parseFloat(e.target.value))}
-          disabled={saving}
-        >
+        <input type="number" min={0} step={0.01} value={costInput} onChange={e => setCostInput(e.target.value)} onBlur={() => trySave(costInput, costInfo.iva_rate)} placeholder="Sin costo" disabled={saving} />
+        <select value={String(costInfo.iva_rate)} onChange={e => trySave(costInput, parseFloat(e.target.value))} disabled={saving}>
           <option value="21">21%</option>
           <option value="10.5">10.5%</option>
           <option value="27">27%</option>
@@ -1258,9 +1123,6 @@ function CostCellMobile({
   )
 }
 
-// ============================================================
-// MODAL: CREAR / EDITAR PRODUCTO MANUAL
-// ============================================================
 function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string | null; onClose: () => void; onSaved: () => void }) {
   const [sku, setSku] = useState('')
   const [title, setTitle] = useState('')
@@ -1270,7 +1132,6 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
   const [loading, setLoading] = useState(!!editingSku)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
   const isEdit = !!editingSku
 
   useEffect(() => {
@@ -1283,61 +1144,38 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
         if (cancelled) return
         const item = (json.items ?? []).find((i: any) => i.seller_sku === editingSku)
         if (item) {
-          setSku(item.seller_sku)
-          setTitle(item.title)
-          setStock(String(item.available_quantity))
+          setSku(item.seller_sku); setTitle(item.title); setStock(String(item.available_quantity))
           setCost(item.cost != null ? String(item.cost) : '')
           setIvaRate(item.iva_rate != null ? String(item.iva_rate) : '21')
         }
-      } catch (err) {
-        if (!cancelled) setError('Error cargando datos del producto')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+      } catch (err) { if (!cancelled) setError('Error cargando datos del producto') }
+      finally { if (!cancelled) setLoading(false) }
     })()
     return () => { cancelled = true }
   }, [editingSku])
 
   const handleSave = async () => {
     setError(null)
-
-    const skuTrim = sku.trim()
-    const titleTrim = title.trim()
+    const skuTrim = sku.trim(); const titleTrim = title.trim()
     const stockNum = parseInt(stock, 10)
     const costNum = cost.trim() === '' ? null : parseFloat(cost)
     const ivaNum = parseFloat(ivaRate)
-
     if (!skuTrim) { setError('El SKU es requerido'); return }
     if (!titleTrim) { setError('El título es requerido'); return }
     if (!Number.isInteger(stockNum) || stockNum < 0) { setError('El stock debe ser un número entero ≥ 0'); return }
     if (costNum !== null && (isNaN(costNum) || costNum < 0)) { setError('El costo debe ser un número ≥ 0'); return }
     if (!Number.isFinite(ivaNum) || ivaNum < 0 || ivaNum > 100) { setError('IVA inválido'); return }
-
     setSaving(true)
     try {
       const res = await fetch('/api/manual-items/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          seller_sku: skuTrim,
-          title: titleTrim,
-          available_quantity: stockNum,
-          cost: costNum,
-          iva_rate: ivaNum,
-          is_edit: isEdit,
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seller_sku: skuTrim, title: titleTrim, available_quantity: stockNum, cost: costNum, iva_rate: ivaNum, is_edit: isEdit }),
       })
       const json = await res.json()
-      if (!json.ok) {
-        setError(json.error ?? 'Error desconocido')
-        return
-      }
+      if (!json.ok) { setError(json.error ?? 'Error desconocido'); return }
       onSaved()
-    } catch (err: any) {
-      setError(err?.message ?? 'Error de red')
-    } finally {
-      setSaving(false)
-    }
+    } catch (err: any) { setError(err?.message ?? 'Error de red') }
+    finally { setSaving(false) }
   }
 
   return (
@@ -1346,69 +1184,32 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
         <div className="modal-header">
           <div>
             <div className="modal-title">{isEdit ? 'Editar producto manual' : 'Crear producto manual'}</div>
-            <div className="modal-subtitle">
-              {isEdit ? 'Modificá los datos del producto' : 'Para llaveros, peluches y otros productos que cargás manualmente'}
-            </div>
+            <div className="modal-subtitle">{isEdit ? 'Modificá los datos del producto' : 'Para llaveros, peluches y otros productos que cargás manualmente'}</div>
           </div>
           <button className="btn-close" onClick={onClose}>✕</button>
         </div>
-
         <div className="modal-body">
-          {loading ? (
-            <p className="loading-text">Cargando...</p>
-          ) : (
+          {loading ? <p className="loading-text">Cargando...</p> : (
             <>
               <div className="form-row">
                 <label className="form-label">SKU *</label>
-                <input
-                  type="text"
-                  value={sku}
-                  onChange={(e) => setSku(e.target.value.toUpperCase())}
-                  placeholder="Ej: LLAVMICKEY, PELUCHE, etc."
-                  className="form-input"
-                  disabled={isEdit}
-                  autoFocus={!isEdit}
-                />
-                <span className="form-hint">{isEdit ? 'El SKU no se puede cambiar' : 'Identificador único. No puede coincidir con un SKU de Mercado Libre.'}</span>
+                <input type="text" value={sku} onChange={(e) => setSku(e.target.value.toUpperCase())} placeholder="Ej: LLAVMICKEY, PELUCHE, etc." className="form-input" disabled={isEdit} autoFocus={!isEdit} />
+                <span className="form-hint">{isEdit ? 'El SKU no se puede cambiar' : 'Identificador único.'}</span>
               </div>
-
               <div className="form-row">
                 <label className="form-label">Título *</label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Ej: Llavero Mickey"
-                  className="form-input"
-                />
+                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ej: Llavero Mickey" className="form-input" />
               </div>
-
               <div className="form-row-double">
                 <div>
                   <label className="form-label">Stock *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={stock}
-                    onChange={(e) => setStock(e.target.value)}
-                    className="form-input"
-                  />
+                  <input type="number" min={0} step={1} value={stock} onChange={(e) => setStock(e.target.value)} className="form-input" />
                 </div>
                 <div>
                   <label className="form-label">Costo unitario (sin IVA)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={cost}
-                    onChange={(e) => setCost(e.target.value)}
-                    placeholder="ARS, opcional"
-                    className="form-input"
-                  />
+                  <input type="number" min={0} step={0.01} value={cost} onChange={(e) => setCost(e.target.value)} placeholder="ARS, opcional" className="form-input" />
                 </div>
               </div>
-
               <div className="form-row">
                 <label className="form-label">IVA aplicable</label>
                 <select value={ivaRate} onChange={e => setIvaRate(e.target.value)} className="form-input">
@@ -1421,9 +1222,7 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
             </>
           )}
         </div>
-
         {error && (<div className="error-msg">{error}</div>)}
-
         <div className="modal-footer">
           <button className="btn-cancel" onClick={onClose} disabled={saving}>Cancelar</button>
           <button className="btn-save" onClick={handleSave} disabled={saving || loading}>
@@ -1431,7 +1230,6 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
           </button>
         </div>
       </div>
-
       <style jsx>{`
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.15s ease; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -1441,10 +1239,8 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
         .modal-subtitle { font-size: 13px; color: var(--text-muted); }
         .btn-close { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 14px; flex-shrink: 0; font-family: inherit; }
         .btn-close:hover { color: var(--text-primary); border-color: var(--border-medium); }
-
         .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
         .loading-text { color: var(--text-muted); text-align: center; padding: 24px; }
-
         .form-row { display: flex; flex-direction: column; gap: 6px; }
         .form-row-double { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .form-row-double > div { display: flex; flex-direction: column; gap: 6px; }
@@ -1454,34 +1250,25 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
         .form-input:disabled { opacity: 0.6; cursor: not-allowed; }
         .form-input::placeholder { color: var(--text-muted); }
         .form-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
-
         .error-msg { margin: 0 24px; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
-
         .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
         .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
         .btn-cancel:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
         .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); }
         .btn-save:hover:not(:disabled) { transform: translateY(-1px); }
         .btn-save:disabled, .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        @media (max-width: 600px) {
-          .form-row-double { grid-template-columns: 1fr; }
-        }
+        @media (max-width: 600px) { .form-row-double { grid-template-columns: 1fr; } }
       `}</style>
     </div>
   )
 }
 
-// ============================================================
-// VISTA: COMBOS
-// ============================================================
 function CombosView() {
   const [data, setData] = useState<CombosApiResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterState, setFilterState] = useState<'all' | 'unconfigured' | 'configured' | 'with_stock' | 'without_stock'>('all')
   const [sort, setSort] = useState<'stock_desc' | 'title_asc' | 'sold_desc'>('stock_desc')
-
   const [editingCombo, setEditingCombo] = useState<Combo | null>(null)
 
   const fetchCombos = useCallback(async () => {
@@ -1490,17 +1277,13 @@ function CombosView() {
       const res = await fetch('/api/combos/list', { cache: 'no-store' })
       const json: CombosApiResponse = await res.json()
       setData(json)
-    } catch (err) {
-      console.error('Error fetch combos:', err)
-    } finally {
-      setLoading(false)
-    }
+    } catch (err) { console.error('Error fetch combos:', err) }
+    finally { setLoading(false) }
   }, [])
 
   useEffect(() => { fetchCombos() }, [fetchCombos])
 
   const allCombos = data?.combos ?? []
-
   const searchLower = search.trim().toLowerCase()
   const filtered = allCombos.filter(c => {
     if (searchLower && !c.title.toLowerCase().includes(searchLower) && !c.sku.toLowerCase().includes(searchLower)) return false
@@ -1532,7 +1315,6 @@ function CombosView() {
           <p className="subtitle">Configurá los componentes de cada combo para calcular su stock real</p>
         </div>
       </div>
-
       <div className="kpis">
         <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
           <div className="kpi-label">Total combos</div>
@@ -1551,16 +1333,8 @@ function CombosView() {
           <div className="kpi-value">{withStock.toLocaleString('es-AR')}</div>
         </div>
       </div>
-
       <div className="filtros">
-        <input
-          type="text"
-          className="search-input"
-          placeholder="Buscar combo por título o SKU..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-
+        <input type="text" className="search-input" placeholder="Buscar combo por título o SKU..." value={search} onChange={(e) => setSearch(e.target.value)} />
         <div className="dropdowns">
           <select value={filterState} onChange={(e) => setFilterState(e.target.value as any)}>
             <option value="all">Todos</option>
@@ -1569,7 +1343,6 @@ function CombosView() {
             <option value="with_stock">Configurados con stock</option>
             <option value="without_stock">Configurados sin stock</option>
           </select>
-
           <select value={sort} onChange={(e) => setSort(e.target.value as any)}>
             <option value="stock_desc">Más stock primero</option>
             <option value="title_asc">Alfabético</option>
@@ -1577,46 +1350,26 @@ function CombosView() {
           </select>
         </div>
       </div>
-
-      <div className="counter">
-        {loading ? 'Cargando combos...' : `Mostrando ${sorted.length} de ${total} combos`}
-      </div>
-
-      {!loading && sorted.length === 0 && (
-        <div className="empty">
-          <p>No hay combos que coincidan con los filtros.</p>
-        </div>
-      )}
-
+      <div className="counter">{loading ? 'Cargando combos...' : `Mostrando ${sorted.length} de ${total} combos`}</div>
+      {!loading && sorted.length === 0 && <div className="empty"><p>No hay combos que coincidan con los filtros.</p></div>}
       <div className="combos-grid">
         {sorted.map(combo => (
           <ComboCard key={combo.sku} combo={combo} onConfigure={() => setEditingCombo(combo)} />
         ))}
       </div>
-
       {editingCombo && (
-        <ComboModal
-          combo={editingCombo}
-          onClose={() => setEditingCombo(null)}
-          onSaved={async () => {
-            setEditingCombo(null)
-            await fetchCombos()
-          }}
-        />
+        <ComboModal combo={editingCombo} onClose={() => setEditingCombo(null)} onSaved={async () => { setEditingCombo(null); await fetchCombos() }} />
       )}
-
       <style jsx>{`
         .combos-view { padding-bottom: 32px; }
         .header { margin-bottom: 24px; }
         .header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
-
         .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
         .kpi { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden; }
         .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-c); opacity: 0.7; }
         .kpi-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
         .kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
-
         .filtros { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
         .search-input { padding: 10px 14px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; }
         .search-input::placeholder { color: var(--text-muted); }
@@ -1624,13 +1377,9 @@ function CombosView() {
         .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
         .dropdowns select { padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; font-family: inherit; min-width: 200px; outline: none; }
         .dropdowns select:focus { border-color: var(--accent); }
-
         .counter { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; }
-
         .combos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
-
         .empty { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 48px; text-align: center; border-radius: 12px; color: var(--text-muted); margin-top: 16px; }
-
         @media (max-width: 768px) {
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
@@ -1642,9 +1391,6 @@ function CombosView() {
   )
 }
 
-// ============================================================
-// CARD DE UN COMBO
-// ============================================================
 function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => void }) {
   const [showComponents, setShowComponents] = useState(false)
   const stockToShow = combo.is_configured ? (combo.real_stock ?? 0) : combo.ml_stock
@@ -1653,48 +1399,26 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
   return (
     <div className={`combo-card ${combo.is_configured ? 'configured' : 'unconfigured'}`}>
       <div className="combo-header">
-        {combo.thumbnail
-          ? <img src={combo.thumbnail.replace('http://', 'https://')} alt="" className="combo-thumb" />
-          : <div className="combo-thumb-placeholder">🎁</div>
-        }
+        {combo.thumbnail ? <img src={combo.thumbnail.replace('http://', 'https://')} alt="" className="combo-thumb" /> : <div className="combo-thumb-placeholder">🎁</div>}
         <div className="combo-info">
           <div className="combo-title">{combo.title}</div>
           <div className="combo-sku">SKU: {combo.sku}</div>
         </div>
       </div>
-
       <div className="combo-status">
-        {combo.is_configured ? (
-          <span className="badge-configured">✓ Configurado ({combo.components.length} componentes)</span>
-        ) : (
-          <span className="badge-unconfigured">⚠ Sin configurar</span>
-        )}
+        {combo.is_configured ? <span className="badge-configured">✓ Configurado ({combo.components.length} componentes)</span> : <span className="badge-unconfigured">⚠ Sin configurar</span>}
       </div>
-
       <div className="combo-stats">
-        <div className="stat">
-          <span className="stat-label">Stock ML</span>
-          <span className="stat-value">{combo.ml_stock}</span>
-        </div>
-        <div className="stat stat-real">
-          <span className="stat-label">Stock real</span>
-          <span className={`stat-value stat-${stockColor}`}>
-            {combo.is_configured ? combo.real_stock ?? 0 : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Vendidos</span>
-          <span className="stat-value">{combo.total_sold}</span>
-        </div>
+        <div className="stat"><span className="stat-label">Stock ML</span><span className="stat-value">{combo.ml_stock}</span></div>
+        <div className="stat stat-real"><span className="stat-label">Stock real</span><span className={`stat-value stat-${stockColor}`}>{combo.is_configured ? combo.real_stock ?? 0 : '—'}</span></div>
+        <div className="stat"><span className="stat-label">Vendidos</span><span className="stat-value">{combo.total_sold}</span></div>
       </div>
-
       {combo.is_configured && combo.components.length > 0 && (
         <button className="btn-toggle-components" onClick={() => setShowComponents(!showComponents)}>
           <span className={`arrow ${showComponents ? 'arrow-open' : ''}`}>▶</span>
           {showComponents ? 'Ocultar componentes' : 'Ver componentes'}
         </button>
       )}
-
       {showComponents && combo.is_configured && (
         <div className="components-list">
           {combo.components.map(c => (
@@ -1704,24 +1428,13 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
                 <div className="component-sku">{c.component_sku} × {c.quantity}</div>
               </div>
               <div className="component-stock">
-                {c.found ? (
-                  <>
-                    <div className="cs-num">{c.component_stock}</div>
-                    <div className="cs-label">stock</div>
-                  </>
-                ) : (
-                  <div className="missing-label">No encontrado</div>
-                )}
+                {c.found ? <><div className="cs-num">{c.component_stock}</div><div className="cs-label">stock</div></> : <div className="missing-label">No encontrado</div>}
               </div>
             </div>
           ))}
         </div>
       )}
-
-      <button className="btn-configure" onClick={onConfigure}>
-        {combo.is_configured ? '✏️ Editar componentes' : '⚙️ Configurar combo'}
-      </button>
-
+      <button className="btn-configure" onClick={onConfigure}>{combo.is_configured ? '✏️ Editar componentes' : '⚙️ Configurar combo'}</button>
       <style jsx>{`
         .combo-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
         .combo-card.unconfigured { border-color: rgba(255, 167, 38, 0.25); }
@@ -1732,11 +1445,9 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
         .combo-info { flex: 1; min-width: 0; }
         .combo-title { font-weight: 500; color: var(--text-primary); font-size: 14px; line-height: 1.35; margin-bottom: 4px; }
         .combo-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); word-break: break-all; }
-
         .combo-status { display: flex; }
         .badge-configured { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 600; border: 1px solid var(--border-medium); }
         .badge-unconfigured { background: rgba(255, 167, 38, 0.12); color: var(--warning); padding: 4px 10px; border-radius: 8px; font-size: 11px; font-weight: 600; border: 1px solid rgba(255, 167, 38, 0.3); }
-
         .combo-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
         .stat { display: flex; flex-direction: column; gap: 2px; }
         .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
@@ -1745,12 +1456,10 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
         .stat-success { color: var(--success); }
         .stat-warning { color: var(--warning); }
         .stat-danger { color: var(--danger); }
-
         .btn-toggle-components { background: transparent; border: 1px dashed var(--border-subtle); color: var(--accent); padding: 8px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 8px; justify-content: center; }
         .btn-toggle-components:hover { border-color: var(--accent); }
         .arrow { display: inline-block; transition: transform 0.18s ease; font-size: 10px; }
         .arrow-open { transform: rotate(90deg); }
-
         .components-list { display: flex; flex-direction: column; gap: 6px; }
         .component-item { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; gap: 10px; }
         .component-item.missing { border-color: rgba(255, 71, 87, 0.3); }
@@ -1761,7 +1470,6 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
         .cs-num { font-size: 16px; font-weight: 700; color: var(--text-primary); }
         .cs-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
         .missing-label { font-size: 10px; color: var(--danger); font-weight: 500; }
-
         .btn-configure { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; }
         .btn-configure:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(62, 229, 224, 0.3); }
       `}</style>
@@ -1769,19 +1477,9 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
   )
 }
 
-// ============================================================
-// MODAL DE CONFIGURACIÓN DE COMBO
-// ============================================================
 function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => void; onSaved: () => void }) {
   type EditComponent = { component_sku: string; component_title: string; quantity: number }
-
-  const [components, setComponents] = useState<EditComponent[]>(
-    combo.components.map(c => ({
-      component_sku: c.component_sku,
-      component_title: c.component_title,
-      quantity: c.quantity,
-    }))
-  )
+  const [components, setComponents] = useState<EditComponent[]>(combo.components.map(c => ({ component_sku: c.component_sku, component_title: c.component_title, quantity: c.quantity })))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showSearch, setShowSearch] = useState(false)
@@ -1790,10 +1488,7 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
   const [searching, setSearching] = useState(false)
 
   useEffect(() => {
-    if (!showSearch || searchQuery.trim().length < 2) {
-      setSearchResults([])
-      return
-    }
+    if (!showSearch || searchQuery.trim().length < 2) { setSearchResults([]); return }
     const timeout = setTimeout(async () => {
       setSearching(true)
       try {
@@ -1801,60 +1496,32 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         const res = await fetch(`/api/combos/search-skus?${params.toString()}`, { cache: 'no-store' })
         const json = await res.json()
         if (json.ok) setSearchResults(json.results)
-      } catch (err) {
-        console.error('Error buscando SKUs:', err)
-      } finally {
-        setSearching(false)
-      }
+      } catch (err) { console.error('Error buscando SKUs:', err) }
+      finally { setSearching(false) }
     }, 300)
     return () => clearTimeout(timeout)
   }, [searchQuery, showSearch, combo.sku])
 
   const addComponent = (sku: string, title: string) => {
-    if (components.some(c => c.component_sku === sku)) {
-      setError(`El componente ${sku} ya está agregado`)
-      return
-    }
+    if (components.some(c => c.component_sku === sku)) { setError(`El componente ${sku} ya está agregado`); return }
     setComponents([...components, { component_sku: sku, component_title: title, quantity: 1 }])
-    setShowSearch(false)
-    setSearchQuery('')
-    setSearchResults([])
-    setError(null)
+    setShowSearch(false); setSearchQuery(''); setSearchResults([]); setError(null)
   }
-
-  const removeComponent = (sku: string) => {
-    setComponents(components.filter(c => c.component_sku !== sku))
-  }
-
-  const updateQuantity = (sku: string, quantity: number) => {
-    setComponents(components.map(c =>
-      c.component_sku === sku ? { ...c, quantity: Math.max(1, Math.floor(quantity)) } : c
-    ))
-  }
+  const removeComponent = (sku: string) => setComponents(components.filter(c => c.component_sku !== sku))
+  const updateQuantity = (sku: string, quantity: number) => setComponents(components.map(c => c.component_sku === sku ? { ...c, quantity: Math.max(1, Math.floor(quantity)) } : c))
 
   const handleSave = async () => {
-    setError(null)
-    setSaving(true)
+    setError(null); setSaving(true)
     try {
       const res = await fetch('/api/combos/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          parent_sku: combo.sku,
-          components: components.map(c => ({ component_sku: c.component_sku, quantity: c.quantity })),
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parent_sku: combo.sku, components: components.map(c => ({ component_sku: c.component_sku, quantity: c.quantity })) }),
       })
       const json = await res.json()
-      if (!json.ok) {
-        setError(json.error ?? 'Error desconocido')
-        return
-      }
+      if (!json.ok) { setError(json.error ?? 'Error desconocido'); return }
       onSaved()
-    } catch (err: any) {
-      setError(err?.message ?? 'Error de red')
-    } finally {
-      setSaving(false)
-    }
+    } catch (err: any) { setError(err?.message ?? 'Error de red') }
+    finally { setSaving(false) }
   }
 
   return (
@@ -1868,16 +1535,9 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
           </div>
           <button className="btn-close" onClick={onClose}>✕</button>
         </div>
-
         <div className="modal-body">
           <div className="section-title">Productos que componen el combo</div>
-
-          {components.length === 0 && !showSearch && (
-            <div className="empty-components">
-              <p>Aún no hay componentes. Agregá los productos que forman parte de este combo.</p>
-            </div>
-          )}
-
+          {components.length === 0 && !showSearch && <div className="empty-components"><p>Aún no hay componentes. Agregá los productos que forman parte de este combo.</p></div>}
           <div className="components-edit-list">
             {components.map(c => (
               <div key={c.component_sku} className="component-edit-row">
@@ -1887,63 +1547,28 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
                 </div>
                 <div className="qty-input-wrap">
                   <span className="qty-label">Cantidad</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={c.quantity}
-                    onChange={(e) => updateQuantity(c.component_sku, parseInt(e.target.value) || 1)}
-                    className="qty-input"
-                  />
+                  <input type="number" min={1} value={c.quantity} onChange={(e) => updateQuantity(c.component_sku, parseInt(e.target.value) || 1)} className="qty-input" />
                 </div>
-                <button className="btn-remove-component" onClick={() => removeComponent(c.component_sku)}>
-                  ✕
-                </button>
+                <button className="btn-remove-component" onClick={() => removeComponent(c.component_sku)}>✕</button>
               </div>
             ))}
           </div>
-
-          {!showSearch && (
-            <button className="btn-add-component" onClick={() => setShowSearch(true)}>
-              + Agregar componente
-            </button>
-          )}
-
+          {!showSearch && <button className="btn-add-component" onClick={() => setShowSearch(true)}>+ Agregar componente</button>}
           {showSearch && (
             <div className="search-component-section">
               <div className="search-header">
-                <input
-                  type="text"
-                  className="search-component-input"
-                  placeholder="Buscar por SKU o título..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  autoFocus
-                />
-                <button className="btn-cancel-search" onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchResults([]); }}>
-                  Cancelar
-                </button>
+                <input type="text" className="search-component-input" placeholder="Buscar por SKU o título..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} autoFocus />
+                <button className="btn-cancel-search" onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchResults([]) }}>Cancelar</button>
               </div>
-              {searchQuery.trim().length < 2 ? (
-                <div className="search-hint">Escribí al menos 2 caracteres...</div>
-              ) : searching ? (
-                <div className="search-hint">Buscando...</div>
-              ) : searchResults.length === 0 ? (
-                <div className="search-hint">Sin resultados</div>
-              ) : (
+              {searchQuery.trim().length < 2 ? <div className="search-hint">Escribí al menos 2 caracteres...</div> :
+                searching ? <div className="search-hint">Buscando...</div> :
+                searchResults.length === 0 ? <div className="search-hint">Sin resultados</div> :
                 <div className="search-results">
                   {searchResults.map(r => {
                     const alreadyAdded = components.some(c => c.component_sku === r.sku)
                     return (
-                      <button
-                        key={r.sku}
-                        className={`search-result ${alreadyAdded ? 'already-added' : ''}`}
-                        onClick={() => !alreadyAdded && addComponent(r.sku, r.title)}
-                        disabled={alreadyAdded}
-                      >
-                        {r.thumbnail
-                          ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" />
-                          : <div className="result-thumb-ph">📦</div>
-                        }
+                      <button key={r.sku} className={`search-result ${alreadyAdded ? 'already-added' : ''}`} onClick={() => !alreadyAdded && addComponent(r.sku, r.title)} disabled={alreadyAdded}>
+                        {r.thumbnail ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" /> : <div className="result-thumb-ph">📦</div>}
                         <div className="result-info">
                           <div className="result-title">{r.title}</div>
                           <div className="result-sku">SKU: {r.sku} · Stock: {r.minStock}</div>
@@ -1953,23 +1578,16 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
                     )
                   })}
                 </div>
-              )}
+              }
             </div>
           )}
         </div>
-
-        {error && (
-          <div className="error-msg">{error}</div>
-        )}
-
+        {error && <div className="error-msg">{error}</div>}
         <div className="modal-footer">
           <button className="btn-cancel" onClick={onClose} disabled={saving}>Cancelar</button>
-          <button className="btn-save" onClick={handleSave} disabled={saving}>
-            {saving ? 'Guardando...' : '💾 Guardar combo'}
-          </button>
+          <button className="btn-save" onClick={handleSave} disabled={saving}>{saving ? 'Guardando...' : '💾 Guardar combo'}</button>
         </div>
       </div>
-
       <style jsx>{`
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.15s ease; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -1980,12 +1598,9 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         .modal-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); }
         .btn-close { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 14px; flex-shrink: 0; }
         .btn-close:hover { color: var(--text-primary); border-color: var(--border-medium); }
-
         .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
         .section-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; font-weight: 600; }
-
         .empty-components { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; background: var(--bg-elevated); border: 1px dashed var(--border-subtle); border-radius: 10px; }
-
         .components-edit-list { display: flex; flex-direction: column; gap: 8px; }
         .component-edit-row { display: flex; gap: 10px; align-items: center; background: var(--bg-elevated); border: 1px solid var(--border-subtle); padding: 10px 12px; border-radius: 10px; }
         .component-edit-info { flex: 1; min-width: 0; }
@@ -1997,10 +1612,8 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         .qty-input:focus { border-color: var(--accent); }
         .btn-remove-component { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 32px; height: 32px; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
         .btn-remove-component:hover { color: var(--danger); border-color: rgba(255, 71, 87, 0.4); }
-
         .btn-add-component { margin-top: 12px; width: 100%; background: transparent; border: 1px dashed var(--border-medium); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
         .btn-add-component:hover { background: rgba(62, 229, 224, 0.05); }
-
         .search-component-section { margin-top: 12px; background: var(--bg-elevated); border: 1px solid var(--border-medium); border-radius: 10px; padding: 12px; }
         .search-header { display: flex; gap: 8px; margin-bottom: 10px; }
         .search-component-input { flex: 1; padding: 9px 12px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-primary); font-family: inherit; outline: none; }
@@ -2017,9 +1630,7 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         .result-title { font-size: 12px; color: var(--text-primary); line-height: 1.2; margin-bottom: 2px; }
         .result-sku { font-size: 10px; color: var(--text-muted); font-family: monospace; }
         .already-tag { font-size: 10px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 6px; }
-
         .error-msg { margin: 12px 24px 0; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
-
         .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
         .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
         .btn-cancel:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
