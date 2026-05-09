@@ -388,19 +388,31 @@ export default function RentabilidadView({
         .main-tab:hover { color: var(--text-secondary); }
         .main-tab.main-tab-active { color: #3ee5e0; border-bottom-color: #3ee5e0; }
 
-        .period-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+        .period-tabs { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
         .period-tab {
-          display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
-          border-radius: 8px; font-size: 13px; font-weight: 500;
-          background: rgba(28, 160, 196, 0.06); color: var(--text-muted);
-          border: 1px solid rgba(62, 229, 224, 0.1); text-decoration: none;
-          transition: all 0.15s ease;
+          display: inline-flex; align-items: center; justify-content: center;
+          padding: 10px 22px;
+          border-radius: 10px; font-size: 13px; font-weight: 600;
+          background: linear-gradient(135deg, #0d4d6e 0%, #1ca0c4 100%);
+          color: #ffffff;
+          border: 1px solid rgba(62, 229, 224, 0.4);
+          text-decoration: none;
+          letter-spacing: 0.3px;
+          transition: all 0.18s ease;
+          box-shadow: 0 2px 10px rgba(28, 160, 196, 0.15);
+          opacity: 0.55;
         }
-        .period-tab:hover { border-color: rgba(62, 229, 224, 0.3); color: #94e8e6; }
+        .period-tab:hover {
+          opacity: 0.85;
+          box-shadow: 0 4px 16px rgba(28, 160, 196, 0.3);
+          transform: translateY(-1px);
+        }
         .period-tab.period-active {
-          background: linear-gradient(135deg, #0d4d6e, #1ca0c4);
-          color: #ffffff; border-color: rgba(62, 229, 224, 0.4);
-          box-shadow: 0 0 14px rgba(28, 160, 196, 0.25);
+          opacity: 1;
+          background: linear-gradient(135deg, #1ca0c4 0%, #3ee5e0 100%);
+          color: #0a121c;
+          border-color: rgba(62, 229, 224, 0.7);
+          box-shadow: 0 4px 18px rgba(62, 229, 224, 0.35);
         }
 
         .warn-banner {
