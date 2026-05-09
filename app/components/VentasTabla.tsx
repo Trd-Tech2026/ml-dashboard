@@ -2,12 +2,34 @@
 
 import { useState } from 'react'
 
-// ===== Tipos =====
 export type OrderItem = {
   item_id: string
   title: string
   quantity: number
   unit_price: number
+}
+
+export type FiscalBreakdown = {
+  ingresosNetos: number
+  costoMerca: number
+  ivaDebito: number
+  ivaCredito: number
+  ivaAPagar: number
+  cargosML: number
+  cargosComision: number
+  cargosCostoFijo: number
+  cargosFinanciacion: number
+  retenciones: number
+  impCreditosDebitos: number
+  impCreditosDebitosEnvio: number
+  impIIBB: number
+  bonificacionEnvio: number
+  gananciaOperativa: number
+  ganancia: number
+  margen: number | null
+  unidadesConCosto: number
+  unidadesSinCosto: number
+  costoCompleto: boolean
 }
 
 export type OrderWithItems = {
@@ -22,23 +44,24 @@ export type OrderWithItems = {
   discounts: number
   net_received: number
   items: OrderItem[]
+  fiscal?: FiscalBreakdown
 }
 
 type Props = {
   ordenes: OrderWithItems[]
-  /** Si es true, muestra HORA. Si es false, muestra FECHA. */
   mostrarHora?: boolean
-  /** Zona horaria a usar para formatear hora/fecha */
   timeZone?: string
 }
 
-// ===== Helpers =====
 function formatARS(n: number): string {
   return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    maximumFractionDigits: 0,
+    style: 'currency', currency: 'ARS', maximumFractionDigits: 0,
   }).format(n)
+}
+
+function formatARSSigned(n: number): string {
+  const formatted = formatARS(Math.abs(n))
+  return n < 0 ? `−${formatted}` : formatted
 }
 
 function colorStatus(status: string): string {
@@ -55,31 +78,26 @@ function resumirProductos(items: OrderItem[]): string {
   return titulo
 }
 
-// ===== Componente =====
+function colorMargen(margen: number | null): string {
+  if (margen == null) return 'var(--text-muted)'
+  if (margen >= 20) return '#3ee5e0'
+  if (margen >= 10) return '#22c55e'
+  if (margen >= 0) return '#facc15'
+  return '#f87171'
+}
+
 export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'America/Argentina/Buenos_Aires' }: Props) {
   const [expandida, setExpandida] = useState<number | null>(null)
 
   const formatTiempo = (iso: string): string => {
     const d = new Date(iso)
     if (mostrarHora) {
-      return d.toLocaleTimeString('es-AR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-        timeZone,
-      })
+      return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone })
     }
-    return d.toLocaleDateString('es-AR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      timeZone,
-    })
+    return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone })
   }
 
-  const toggle = (orderId: number) => {
-    setExpandida(prev => (prev === orderId ? null : orderId))
-  }
+  const toggle = (orderId: number) => setExpandida(prev => (prev === orderId ? null : orderId))
 
   if (ordenes.length === 0) {
     return <p className="vt-empty">No hay ventas en este período.</p>
@@ -87,7 +105,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
 
   return (
     <>
-      {/* Tabla desktop */}
+      {/* TABLA DESKTOP */}
       <div className="vt-tabla-desktop">
         <table>
           <thead>
@@ -98,13 +116,16 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
               <th>Comprador</th>
               <th>Producto</th>
               <th>Estado</th>
-              <th style={{ textAlign: 'right' }}>Total</th>
+              <th style={{ textAlign: 'right' }}>Margen</th>
+              <th style={{ textAlign: 'right' }}>Recibido</th>
             </tr>
           </thead>
           <tbody>
             {ordenes.map((o) => {
               const isOpen = expandida === o.order_id
               const tieneVarios = (o.items?.length ?? 0) > 1
+              const fiscal = o.fiscal
+              const margen = fiscal?.margen ?? null
               return (
                 <>
                   <tr
@@ -127,19 +148,24 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                         {o.status}
                       </span>
                     </td>
-                    <td className="vt-total">{formatARS(Number(o.total_amount ?? 0))}</td>
+                    <td className="vt-margen" style={{ color: colorMargen(margen) }}>
+                      {margen != null ? `${margen.toFixed(1)}%` : (
+                        <span className="vt-margen-falta" title="Falta cargar el costo del producto">— falta costo</span>
+                      )}
+                    </td>
+                    <td className="vt-total">{formatARS(Number(o.net_received ?? o.total_amount ?? 0))}</td>
                   </tr>
                   {isOpen && (
                     <tr key={`${o.order_id}-detail`} className="vt-detail-row">
-                      <td colSpan={7}>
+                      <td colSpan={8}>
                         <div className="vt-detail">
-                          <div className="vt-detail-title">Productos de esta venta</div>
+                          <div className="vt-detail-title">Productos</div>
                           <table className="vt-subtabla">
                             <thead>
                               <tr>
                                 <th style={{ width: '60px' }}>Cant.</th>
                                 <th>Producto</th>
-                                <th style={{ width: '120px' }}>SKU</th>
+                                <th style={{ width: '160px' }}>SKU</th>
                                 <th style={{ textAlign: 'right', width: '120px' }}>Precio unit.</th>
                                 <th style={{ textAlign: 'right', width: '120px' }}>Subtotal</th>
                               </tr>
@@ -159,38 +185,139 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                             </tbody>
                           </table>
 
-                          {/* Desglose financiero */}
-                          {o.net_received > 0 && (
-                            <div className="vt-financial">
-                              <div className="vt-financial-row">
-                                <span className="vt-fin-label">Total cobrado al comprador</span>
-                                <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
+                          {/* DESGLOSE FISCAL COMPLETO */}
+                          {fiscal && o.net_received > 0 && (
+                            <div className="vt-fiscal-grid">
+                              {/* Operativo */}
+                              <div className="vt-fiscal-block">
+                                <div className="vt-fiscal-block-title">OPERATIVO</div>
+                                <div className="vt-fiscal-row">
+                                  <span>Total cobrado al cliente</span>
+                                  <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
+                                </div>
+                                <div className="vt-fiscal-row vt-fin-deduct">
+                                  <span>− Cargos ML</span>
+                                  <span className="vt-fin-value">−{formatARS(fiscal.cargosML)}</span>
+                                </div>
+                                {fiscal.cargosComision > 0 && (
+                                  <div className="vt-fiscal-row vt-fiscal-sub">
+                                    <span>· Comisión</span>
+                                    <span>−{formatARS(fiscal.cargosComision)}</span>
+                                  </div>
+                                )}
+                                {fiscal.cargosCostoFijo > 0 && (
+                                  <div className="vt-fiscal-row vt-fiscal-sub">
+                                    <span>· Costo fijo</span>
+                                    <span>−{formatARS(fiscal.cargosCostoFijo)}</span>
+                                  </div>
+                                )}
+                                {fiscal.cargosFinanciacion > 0 && (
+                                  <div className="vt-fiscal-row vt-fiscal-sub">
+                                    <span>· Recargo cuotas</span>
+                                    <span>−{formatARS(fiscal.cargosFinanciacion)}</span>
+                                  </div>
+                                )}
+                                {fiscal.retenciones > 0 && (
+                                  <>
+                                    <div className="vt-fiscal-row vt-fin-deduct">
+                                      <span>− Retenciones</span>
+                                      <span className="vt-fin-value">−{formatARS(fiscal.retenciones)}</span>
+                                    </div>
+                                    {fiscal.impIIBB > 0 && (
+                                      <div className="vt-fiscal-row vt-fiscal-sub">
+                                        <span>· IIBB</span>
+                                        <span>−{formatARS(fiscal.impIIBB)}</span>
+                                      </div>
+                                    )}
+                                    {fiscal.impCreditosDebitos > 0 && (
+                                      <div className="vt-fiscal-row vt-fiscal-sub">
+                                        <span>· Créd/déb</span>
+                                        <span>−{formatARS(fiscal.impCreditosDebitos)}</span>
+                                      </div>
+                                    )}
+                                    {fiscal.impCreditosDebitosEnvio > 0 && (
+                                      <div className="vt-fiscal-row vt-fiscal-sub">
+                                        <span>· Créd/déb envío</span>
+                                        <span>−{formatARS(fiscal.impCreditosDebitosEnvio)}</span>
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                                {fiscal.bonificacionEnvio > 0 && (
+                                  <div className="vt-fiscal-row vt-fin-bonus">
+                                    <span>+ Bonificación envío</span>
+                                    <span className="vt-fin-value">+{formatARS(fiscal.bonificacionEnvio)}</span>
+                                  </div>
+                                )}
+                                <div className="vt-fiscal-row vt-fin-total">
+                                  <span>= Recibido (de ML)</span>
+                                  <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                                </div>
                               </div>
-                              {o.marketplace_fee > 0 && (
-                                <div className="vt-financial-row vt-fin-deduct">
-                                  <span className="vt-fin-label">— Comisión ML + impuestos</span>
-                                  <span className="vt-fin-value">−{formatARS(o.marketplace_fee)}</span>
+
+                              {/* IVA */}
+                              <div className="vt-fiscal-block">
+                                <div className="vt-fiscal-block-title">IVA (Resp. Inscripto)</div>
+                                <div className="vt-fiscal-row">
+                                  <span>IVA débito (cobrado)</span>
+                                  <span className="vt-fin-value">{formatARS(fiscal.ivaDebito)}</span>
                                 </div>
-                              )}
-                              {o.shipping_cost > 0 && (
-                                <div className="vt-financial-row vt-fin-deduct">
-                                  <span className="vt-fin-label">— Costo de envío</span>
-                                  <span className="vt-fin-value">−{formatARS(o.shipping_cost)}</span>
+                                <div className="vt-fiscal-row vt-fin-bonus">
+                                  <span>− IVA crédito (pagado)</span>
+                                  <span className="vt-fin-value">−{formatARS(fiscal.ivaCredito)}</span>
                                 </div>
-                              )}
-                              {o.discounts > 0 && (
-                                <div className="vt-financial-row vt-fin-bonus">
-                                  <span className="vt-fin-label">+ Descuentos y bonificaciones</span>
-                                  <span className="vt-fin-value">+{formatARS(o.discounts)}</span>
+                                <div className="vt-fiscal-row vt-fin-total">
+                                  <span>= {fiscal.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}</span>
+                                  <span className={`vt-fin-value ${fiscal.ivaAPagar > 0 ? 'vt-val-neg' : 'vt-val-pos'}`}>
+                                    {formatARSSigned(fiscal.ivaAPagar)}
+                                  </span>
                                 </div>
-                              )}
-                              <div className="vt-financial-row vt-fin-total">
-                                <span className="vt-fin-label">💰 Recibís</span>
-                                <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                              </div>
+
+                              {/* RESULTADO */}
+                              <div className="vt-fiscal-block vt-fiscal-block-result">
+                                <div className="vt-fiscal-block-title">RESULTADO</div>
+                                <div className="vt-fiscal-row">
+                                  <span>Ingresos netos (sin IVA)</span>
+                                  <span className="vt-fin-value">{formatARS(fiscal.ingresosNetos)}</span>
+                                </div>
+                                <div className="vt-fiscal-row vt-fin-deduct">
+                                  <span>− Costo merca (sin IVA)</span>
+                                  <span className="vt-fin-value">−{formatARS(fiscal.costoMerca)}</span>
+                                </div>
+                                <div className="vt-fiscal-row">
+                                  <span>= Ganancia operativa</span>
+                                  <span className={`vt-fin-value ${fiscal.gananciaOperativa >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
+                                    {formatARSSigned(fiscal.gananciaOperativa)}
+                                  </span>
+                                </div>
+                                <div className="vt-fiscal-row vt-fin-deduct">
+                                  <span>− IVA a pagar</span>
+                                  <span className="vt-fin-value">−{formatARS(fiscal.ivaAPagar)}</span>
+                                </div>
+                                <div className="vt-fiscal-row vt-fin-total vt-fiscal-final">
+                                  <span>💰 Ganancia neta</span>
+                                  <span className={`vt-fin-value ${fiscal.ganancia >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
+                                    {formatARSSigned(fiscal.ganancia)}
+                                  </span>
+                                </div>
+                                {fiscal.margen != null ? (
+                                  <div className="vt-fiscal-row vt-fiscal-margen">
+                                    <span>Margen real</span>
+                                    <span style={{ color: colorMargen(fiscal.margen), fontWeight: 700 }}>
+                                      {fiscal.margen.toFixed(1)}%
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="vt-fiscal-warning">
+                                    ⚠️ Falta cargar el costo de {fiscal.unidadesSinCosto} {fiscal.unidadesSinCosto === 1 ? 'unidad' : 'unidades'}.
+                                    Margen no calculable.
+                                  </div>
+                                )}
                               </div>
                             </div>
                           )}
-                          {o.net_received === 0 && o.status === 'paid' && (
+                          {(!fiscal || o.net_received === 0) && o.status === 'paid' && (
                             <div className="vt-no-data">Datos financieros no disponibles para esta orden.</div>
                           )}
                         </div>
@@ -204,11 +331,13 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         </table>
       </div>
 
-      {/* Cards mobile */}
+      {/* CARDS MOBILE */}
       <div className="vt-cards-mobile">
         {ordenes.map((o) => {
           const isOpen = expandida === o.order_id
           const tieneVarios = (o.items?.length ?? 0) > 1
+          const fiscal = o.fiscal
+          const margen = fiscal?.margen ?? null
           return (
             <div key={o.order_id} className={`vt-card ${isOpen ? 'vt-card-open' : ''}`}>
               <div className="vt-card-clickable" onClick={() => toggle(o.order_id)}>
@@ -226,7 +355,10 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                 </div>
                 <div className="vt-card-row">
                   <span className="vt-card-orderid">#{o.order_id}</span>
-                  <span className="vt-card-total">{formatARS(Number(o.total_amount ?? 0))}</span>
+                  <span className="vt-card-margen" style={{ color: colorMargen(margen) }}>
+                    {margen != null ? `${margen.toFixed(1)}%` : '—'}
+                  </span>
+                  <span className="vt-card-total">{formatARS(Number(o.net_received ?? o.total_amount ?? 0))}</span>
                 </div>
               </div>
               {isOpen && (
@@ -244,39 +376,74 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                       </div>
                     </div>
                   ))}
-                  {/* Desglose financiero mobile */}
-                  {o.net_received > 0 && (
-                    <div className="vt-financial">
-                      <div className="vt-financial-row">
-                        <span className="vt-fin-label">Total</span>
-                        <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
+                  {fiscal && o.net_received > 0 && (
+                    <>
+                      <div className="vt-fiscal-block">
+                        <div className="vt-fiscal-block-title">OPERATIVO</div>
+                        <div className="vt-fiscal-row">
+                          <span>Total cobrado</span>
+                          <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
+                        </div>
+                        <div className="vt-fiscal-row vt-fin-deduct">
+                          <span>− Cargos ML</span>
+                          <span className="vt-fin-value">−{formatARS(fiscal.cargosML)}</span>
+                        </div>
+                        {fiscal.retenciones > 0 && (
+                          <div className="vt-fiscal-row vt-fin-deduct">
+                            <span>− Retenciones</span>
+                            <span className="vt-fin-value">−{formatARS(fiscal.retenciones)}</span>
+                          </div>
+                        )}
+                        {fiscal.bonificacionEnvio > 0 && (
+                          <div className="vt-fiscal-row vt-fin-bonus">
+                            <span>+ Bonif. envío</span>
+                            <span className="vt-fin-value">+{formatARS(fiscal.bonificacionEnvio)}</span>
+                          </div>
+                        )}
+                        <div className="vt-fiscal-row vt-fin-total">
+                          <span>= Recibido</span>
+                          <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                        </div>
                       </div>
-                      {o.marketplace_fee > 0 && (
-                        <div className="vt-financial-row vt-fin-deduct">
-                          <span className="vt-fin-label">— ML + impuestos</span>
-                          <span className="vt-fin-value">−{formatARS(o.marketplace_fee)}</span>
+
+                      <div className="vt-fiscal-block">
+                        <div className="vt-fiscal-block-title">IVA</div>
+                        <div className="vt-fiscal-row">
+                          <span>IVA débito</span>
+                          <span className="vt-fin-value">{formatARS(fiscal.ivaDebito)}</span>
                         </div>
-                      )}
-                      {o.shipping_cost > 0 && (
-                        <div className="vt-financial-row vt-fin-deduct">
-                          <span className="vt-fin-label">— Envío</span>
-                          <span className="vt-fin-value">−{formatARS(o.shipping_cost)}</span>
+                        <div className="vt-fiscal-row vt-fin-bonus">
+                          <span>− IVA crédito</span>
+                          <span className="vt-fin-value">−{formatARS(fiscal.ivaCredito)}</span>
                         </div>
-                      )}
-                      {o.discounts > 0 && (
-                        <div className="vt-financial-row vt-fin-bonus">
-                          <span className="vt-fin-label">+ Bonificaciones</span>
-                          <span className="vt-fin-value">+{formatARS(o.discounts)}</span>
+                        <div className="vt-fiscal-row vt-fin-total">
+                          <span>= IVA a pagar</span>
+                          <span className="vt-fin-value">{formatARSSigned(fiscal.ivaAPagar)}</span>
                         </div>
-                      )}
-                      <div className="vt-financial-row vt-fin-total">
-                        <span className="vt-fin-label">💰 Recibís</span>
-                        <span className="vt-fin-value">{formatARS(o.net_received)}</span>
                       </div>
-                    </div>
-                  )}
-                  {o.net_received === 0 && o.status === 'paid' && (
-                    <div className="vt-no-data">Datos financieros no disponibles.</div>
+
+                      <div className="vt-fiscal-block vt-fiscal-block-result">
+                        <div className="vt-fiscal-block-title">RESULTADO</div>
+                        <div className="vt-fiscal-row vt-fin-total vt-fiscal-final">
+                          <span>💰 Ganancia neta</span>
+                          <span className={`vt-fin-value ${fiscal.ganancia >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
+                            {formatARSSigned(fiscal.ganancia)}
+                          </span>
+                        </div>
+                        {fiscal.margen != null ? (
+                          <div className="vt-fiscal-row vt-fiscal-margen">
+                            <span>Margen real</span>
+                            <span style={{ color: colorMargen(fiscal.margen), fontWeight: 700 }}>
+                              {fiscal.margen.toFixed(1)}%
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="vt-fiscal-warning">
+                            ⚠️ Falta cargar costo de {fiscal.unidadesSinCosto} {fiscal.unidadesSinCosto === 1 ? 'unidad' : 'unidades'}.
+                          </div>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -286,61 +453,52 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
       </div>
 
       <style>{`
-        /* ===== TABLA DESKTOP ===== */
-        .vt-tabla-desktop table {
-          width: 100%;
-          border-collapse: collapse;
-        }
+        /* TABLA DESKTOP */
+        .vt-tabla-desktop table { width: 100%; border-collapse: collapse; }
         .vt-tabla-desktop thead tr {
-          border-bottom: 2px solid #eee;
+          border-bottom: 2px solid rgba(62, 229, 224, 0.15);
           text-align: left;
         }
         .vt-tabla-desktop th {
           padding: 12px 8px;
-          color: #666;
+          color: #ffffff;
           font-size: 13px;
+          font-weight: 600;
+          letter-spacing: 0.3px;
         }
         .vt-row {
-          border-bottom: 1px solid #f0f0f0;
+          border-bottom: 1px solid rgba(62, 229, 224, 0.06);
           cursor: pointer;
           transition: background-color 0.12s;
         }
-        .vt-row:hover {
-          background-color: #fafafa;
-        }
-        .vt-row-open {
-          background-color: #f5f9ff;
-        }
-        .vt-row-open:hover {
-          background-color: #f5f9ff;
-        }
+        .vt-row:hover { background-color: rgba(62, 229, 224, 0.04); }
+        .vt-row-open { background-color: rgba(28, 160, 196, 0.08); }
+        .vt-row-open:hover { background-color: rgba(28, 160, 196, 0.08); }
         .vt-tabla-desktop td {
           padding: 12px 8px;
           font-size: 14px;
           vertical-align: middle;
+          color: var(--text-secondary);
         }
-        .vt-arrow-cell {
-          width: 32px;
-          text-align: center;
-        }
+        .vt-arrow-cell { width: 32px; text-align: center; }
         .vt-arrow {
           display: inline-block;
-          color: #999;
+          color: var(--text-muted);
           font-size: 11px;
           transition: transform 0.18s;
         }
-        .vt-arrow-open {
-          transform: rotate(90deg);
-          color: #2196F3;
-        }
+        .vt-arrow-open { transform: rotate(90deg); color: #3ee5e0; }
+
         .vt-order-id {
           font-size: 13px;
-          color: #666;
+          color: #ffffff;
+          font-weight: 500;
         }
         .vt-producto {
           max-width: 320px;
           font-size: 13px;
-          color: #333;
+          color: #ffffff;
+          font-weight: 500;
         }
         .vt-producto-text {
           display: -webkit-box;
@@ -351,8 +509,8 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         }
         .vt-mas-chip {
           display: inline-block;
-          background: #e3f2fd;
-          color: #1565c0;
+          background: rgba(62, 229, 224, 0.15);
+          color: #3ee5e0;
           font-size: 11px;
           padding: 2px 7px;
           border-radius: 10px;
@@ -360,9 +518,23 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-weight: 600;
           white-space: nowrap;
         }
+        .vt-margen {
+          text-align: right;
+          font-weight: 700;
+          font-size: 14px;
+          font-variant-numeric: tabular-nums;
+        }
+        .vt-margen-falta {
+          font-size: 11px;
+          font-weight: 500;
+          color: var(--text-muted);
+          font-style: italic;
+        }
         .vt-total {
           text-align: right;
-          font-weight: bold;
+          font-weight: 700;
+          color: var(--text-primary);
+          font-variant-numeric: tabular-nums;
         }
         .vt-badge {
           color: white;
@@ -372,35 +544,35 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-weight: bold;
           display: inline-block;
         }
-        .vt-detail-row {
-          background-color: #fafbfc;
-        }
+
+        .vt-detail-row { background-color: rgba(10, 18, 28, 0.4); }
         .vt-detail {
           padding: 16px 24px 20px;
-          border-left: 3px solid #2196F3;
+          border-left: 3px solid #3ee5e0;
           margin: 4px 0 4px 16px;
         }
         .vt-detail-title {
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 700;
-          color: #555;
+          color: #3ee5e0;
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.8px;
           margin-bottom: 10px;
         }
         .vt-subtabla {
           width: 100%;
           border-collapse: collapse;
-          background: white;
-          border-radius: 6px;
+          background: rgba(13, 77, 110, 0.12);
+          border: 1px solid rgba(62, 229, 224, 0.1);
+          border-radius: 8px;
           overflow: hidden;
         }
         .vt-subtabla th {
-          background: #f5f5f5;
+          background: rgba(13, 77, 110, 0.2);
           padding: 8px 12px;
           font-size: 11px;
           font-weight: 600;
-          color: #666;
+          color: #94e8e6;
           text-transform: uppercase;
           text-align: left;
           letter-spacing: 0.4px;
@@ -408,120 +580,138 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         .vt-subtabla td {
           padding: 10px 12px;
           font-size: 13px;
-          border-top: 1px solid #f0f0f0;
+          color: var(--text-secondary);
+          border-top: 1px solid rgba(62, 229, 224, 0.06);
         }
         .vt-sku {
           font-family: monospace;
           font-size: 11px;
-          color: #888;
+          color: var(--text-muted);
         }
 
-        /* Desglose financiero (Recibís) */
-        .vt-financial {
-          margin-top: 14px;
-          background: white;
-          border: 1px solid #e5e5e5;
-          border-radius: 8px;
-          padding: 12px 16px;
+        /* DESGLOSE FISCAL */
+        .vt-fiscal-grid {
+          margin-top: 16px;
+          display: grid;
+          grid-template-columns: 1.2fr 1fr 1.2fr;
+          gap: 12px;
         }
-        .vt-financial-row {
+        .vt-fiscal-block {
+          background: rgba(10, 18, 28, 0.5);
+          border: 1px solid rgba(62, 229, 224, 0.12);
+          border-radius: 8px;
+          padding: 12px 14px;
+        }
+        .vt-fiscal-block-result {
+          background: rgba(28, 160, 196, 0.08);
+          border-color: rgba(62, 229, 224, 0.25);
+        }
+        .vt-fiscal-block-title {
+          font-size: 10px;
+          letter-spacing: 1px;
+          color: var(--text-muted);
+          font-weight: 700;
+          margin-bottom: 8px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid rgba(62, 229, 224, 0.1);
+        }
+        .vt-fiscal-row {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 6px 0;
-          font-size: 13px;
-          color: #555;
+          padding: 4px 0;
+          font-size: 12px;
+          color: var(--text-secondary);
         }
-        .vt-financial-row.vt-fin-deduct {
-          color: #d32f2f;
+        .vt-fiscal-row.vt-fin-deduct { color: var(--text-secondary); }
+        .vt-fiscal-row.vt-fin-bonus { color: #3ee5e0; }
+        .vt-fiscal-sub {
+          padding: 2px 0 2px 12px;
+          font-size: 11px;
+          color: var(--text-muted);
         }
-        .vt-financial-row.vt-fin-bonus {
-          color: #2e7d32;
-        }
-        .vt-financial-row.vt-fin-total {
-          border-top: 2px solid #f0f0f0;
-          margin-top: 4px;
-          padding-top: 10px;
-          font-weight: 700;
-          color: #2e7d32;
-          font-size: 15px;
-        }
-        .vt-fin-label {
-          flex: 1;
-        }
+        .vt-fiscal-sub span:last-child { font-family: monospace; }
         .vt-fin-value {
-          font-family: monospace;
+          font-family: ui-sans-serif, system-ui, sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 13px;
+          font-weight: 500;
+        }
+        .vt-fin-total {
+          border-top: 1px solid rgba(62, 229, 224, 0.15);
+          margin-top: 4px;
+          padding-top: 8px;
+          font-weight: 700;
+          color: var(--text-primary);
+          font-size: 13px;
+        }
+        .vt-fin-total .vt-fin-value { font-size: 14px; }
+        .vt-fiscal-final {
+          margin-top: 6px;
+          padding-top: 10px;
           font-size: 14px;
         }
-        .vt-fin-total .vt-fin-value {
-          font-size: 16px;
+        .vt-fiscal-final .vt-fin-value { font-size: 16px; }
+        .vt-val-pos { color: #3ee5e0; }
+        .vt-val-neg { color: #f87171; }
+        .vt-fiscal-margen {
+          margin-top: 8px;
+          padding-top: 8px;
+          border-top: 1px dashed rgba(62, 229, 224, 0.15);
+          font-size: 12px;
+        }
+        .vt-fiscal-warning {
+          margin-top: 10px;
+          padding: 8px 10px;
+          background: rgba(255, 167, 38, 0.1);
+          color: #fbbf24;
+          border: 1px solid rgba(255, 167, 38, 0.25);
+          border-radius: 6px;
+          font-size: 11px;
+          line-height: 1.4;
         }
         .vt-no-data {
           margin-top: 12px;
           padding: 8px 12px;
-          background: #fff3e0;
-          color: #e65100;
+          background: rgba(255, 167, 38, 0.1);
+          color: #fbbf24;
           border-radius: 6px;
           font-size: 12px;
           text-align: center;
         }
+        .vt-empty { color: var(--text-muted); padding: 16px 0; margin: 0; }
 
-        .vt-empty {
-          color: #999;
-          padding: 16px 0;
-          margin: 0;
-        }
+        /* CARDS MOBILE */
+        .vt-cards-mobile { display: none; }
 
-        /* ===== CARDS MOBILE ===== */
-        .vt-cards-mobile {
-          display: none;
+        @media (max-width: 1300px) {
+          .vt-fiscal-grid { grid-template-columns: 1fr 1fr; }
+          .vt-fiscal-block-result { grid-column: 1 / -1; }
         }
 
         @media (max-width: 768px) {
-          .vt-tabla-desktop {
-            display: none;
-          }
-          .vt-cards-mobile {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-          }
+          .vt-tabla-desktop { display: none; }
+          .vt-cards-mobile { display: flex; flex-direction: column; gap: 10px; }
           .vt-card {
-            background-color: #fafafa;
+            background: var(--bg-card);
             border-radius: 10px;
-            border: 1px solid #eee;
+            border: 1px solid var(--border-subtle);
             overflow: hidden;
           }
-          .vt-card-open {
-            border-color: #2196F3;
-          }
-          .vt-card-clickable {
-            padding: 12px 14px;
-            cursor: pointer;
-          }
-          .vt-card-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-          }
-          .vt-card-hora {
-            font-size: 14px;
-            font-weight: bold;
-            color: #333;
-          }
-          .vt-card-comprador {
-            font-size: 14px;
-            color: #555;
-            margin: 6px 0;
-          }
+          .vt-card-open { border-color: #3ee5e0; }
+          .vt-card-clickable { padding: 12px 14px; cursor: pointer; }
+          .vt-card-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+          .vt-card-hora { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+          .vt-card-comprador { font-size: 13px; color: var(--text-secondary); margin: 6px 0; }
           .vt-card-producto {
             display: flex;
             align-items: center;
             gap: 6px;
             font-size: 13px;
-            color: #333;
+            color: var(--text-primary);
+            font-weight: 500;
             margin-bottom: 8px;
-            background: white;
+            background: rgba(62, 229, 224, 0.04);
             padding: 6px 10px;
             border-radius: 6px;
           }
@@ -535,48 +725,25 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           }
           .vt-arrow-mobile {
             display: inline-block;
-            color: #999;
+            color: var(--text-muted);
             font-size: 10px;
             transition: transform 0.18s;
           }
-          .vt-card-orderid {
-            font-size: 12px;
-            color: #999;
-          }
-          .vt-card-total {
-            font-size: 15px;
-            font-weight: bold;
-            color: #333;
-          }
+          .vt-card-orderid { font-size: 11px; color: var(--text-muted); }
+          .vt-card-margen { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+          .vt-card-total { font-size: 14px; font-weight: 700; color: var(--text-primary); }
           .vt-card-detail {
             padding: 12px 14px 14px;
-            background: white;
-            border-top: 1px solid #eee;
+            background: rgba(10, 18, 28, 0.3);
+            border-top: 1px solid var(--border-subtle);
           }
-          .vt-card-item {
-            padding: 8px 0;
-            border-bottom: 1px solid #f5f5f5;
-          }
-          .vt-card-item:last-child {
-            border-bottom: none;
-          }
-          .vt-card-item-row {
-            display: flex;
-            gap: 8px;
-            align-items: flex-start;
-          }
-          .vt-card-item-title {
-            flex: 1;
-            font-size: 13px;
-            color: #333;
-            line-height: 1.3;
-          }
-          .vt-card-item-meta {
-            justify-content: space-between;
-            margin-top: 4px;
-            font-size: 12px;
-            color: #888;
-          }
+          .vt-card-item { padding: 8px 0; border-bottom: 1px solid rgba(62, 229, 224, 0.06); }
+          .vt-card-item:last-child { border-bottom: none; }
+          .vt-card-item-row { display: flex; gap: 8px; align-items: flex-start; color: var(--text-secondary); }
+          .vt-card-item-title { flex: 1; font-size: 13px; line-height: 1.3; }
+          .vt-card-item-meta { justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+          .vt-fiscal-grid { display: block; }
+          .vt-fiscal-block { margin-top: 10px; }
         }
       `}</style>
     </>
