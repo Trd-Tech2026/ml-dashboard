@@ -65,8 +65,8 @@ export default function RentabilidadView({
   const formatARSFull = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
-  const formatARSSigned = (n: number) => {
-    const formatted = formatARS(Math.abs(n))
+  const formatARSFullSigned = (n: number) => {
+    const formatted = formatARSFull(Math.abs(n))
     return n < 0 ? `−${formatted}` : formatted
   }
 
@@ -217,9 +217,9 @@ export default function RentabilidadView({
                     </span>
                   )}
                 </div>
-                <div className="hero-amount">{formatARSSigned(calcActual.ganancia)}</div>
+                <div className="hero-amount">{formatARSFullSigned(calcActual.ganancia)}</div>
                 <div className="hero-sub">
-                  {formatARSFull(calcActual.ganancia)} · después de IVA, comisiones, retenciones
+                  después de IVA, comisiones, retenciones
                 </div>
                 <div className="hero-cambio">
                   {renderCambio(cambioGanancia, labelComparacion)}
@@ -532,12 +532,12 @@ export default function RentabilidadView({
         @keyframes pulse-dot { 50% { opacity: 0.4; } }
 
         .hero-amount {
-          font-size: 60px;
+          font-size: 52px;
           font-weight: 500;
           line-height: 1;
           color: #3ee5e0;
           font-variant-numeric: tabular-nums;
-          letter-spacing: -1.5px;
+          letter-spacing: -1.2px;
           margin-bottom: 8px;
         }
         .hero-neg .hero-amount { color: #f87171; }
