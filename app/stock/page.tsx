@@ -23,6 +23,7 @@ type Item = {
   archived: boolean
   is_manual?: boolean
   cost?: number | null
+  iva_rate?: number
 }
 
 type Group = {
@@ -114,6 +115,8 @@ type SkuSearchResult = {
   minStock: number
 }
 
+type CostInfo = { cost: number | null; iva_rate: number }
+
 // ===== Helpers =====
 function formatearPrecio(price: number, currency: string) {
   return new Intl.NumberFormat('es-AR', {
@@ -177,6 +180,11 @@ function itemsToFakeGroups(items: Item[]): Group[] {
   }))
 }
 
+function costMapKey(item: Item): string {
+  if (item.is_manual && item.seller_sku) return `MANUAL:${item.seller_sku}`
+  return item.item_id
+}
+
 // ===== Componente principal =====
 export default function StockPage() {
   return (
@@ -238,6 +246,12 @@ function ProductosView() {
   const [showManualModal, setShowManualModal] = useState(false)
   const [editingManualSku, setEditingManualSku] = useState<string | null>(null)
 
+  // ===== Modificación de costos =====
+  const [editingCosts, setEditingCosts] = useState(false)
+  const [costInfoMap, setCostInfoMap] = useState<Map<string, CostInfo>>(new Map())
+  const [savingCostKey, setSavingCostKey] = useState<string | null>(null)
+  const [savedRecentlyKey, setSavedRecentlyKey] = useState<string | null>(null)
+
   const fetchItems = useCallback(async () => {
     setLoading(true)
     const params = new URLSearchParams({
@@ -265,6 +279,89 @@ function ProductosView() {
   useEffect(() => { fetchItems() }, [fetchItems])
   useEffect(() => { setPage(1) }, [search, status, logistic, stockFilter, sort, showArchived, groupBySku])
   useEffect(() => { setSelected(new Set()) }, [showArchived])
+
+  // Después de cargar items, fetch cost-info para mostrar costos en tabla
+  useEffect(() => {
+    if (!data) return
+    const allItems: Item[] = data.mode === 'grouped'
+      ? (data.groups ?? []).flatMap(g => g.items)
+      : (data.items ?? [])
+    if (allItems.length === 0) return
+
+    const itemIds: string[] = []
+    const sellerSkus: string[] = []
+    for (const item of allItems) {
+      if (item.is_manual) {
+        if (item.seller_sku) sellerSkus.push(item.seller_sku)
+      } else {
+        itemIds.push(item.item_id)
+      }
+    }
+    if (itemIds.length === 0 && sellerSkus.length === 0) return
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/items/cost-info', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_ids: itemIds, seller_skus: sellerSkus }),
+        })
+        const json = await res.json()
+        if (cancelled || !json.ok) return
+        const map = new Map<string, CostInfo>()
+        for (const [key, value] of Object.entries(json.costs as Record<string, CostInfo>)) {
+          map.set(key, value)
+        }
+        setCostInfoMap(map)
+      } catch (err) {
+        console.error('Error fetch cost-info:', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [data])
+
+  const getCostInfo = (item: Item): CostInfo => {
+    const fromMap = costInfoMap.get(costMapKey(item))
+    if (fromMap) return fromMap
+    return { cost: item.cost ?? null, iva_rate: item.iva_rate ?? 21 }
+  }
+
+  const handleSaveCost = async (item: Item, newCost: number | null, newIvaRate: number) => {
+    const key = costMapKey(item)
+    setSavingCostKey(key)
+    try {
+      const res = await fetch('/api/items/update-cost', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item_id: item.item_id,
+          seller_sku: item.seller_sku,
+          is_manual: !!item.is_manual,
+          cost: newCost,
+          iva_rate: newIvaRate,
+        }),
+      })
+      const json = await res.json()
+      if (!json.ok) {
+        alert(`No se pudo guardar: ${json.error ?? 'error desconocido'}`)
+        return
+      }
+      setCostInfoMap(prev => {
+        const next = new Map(prev)
+        next.set(key, { cost: newCost, iva_rate: newIvaRate })
+        return next
+      })
+      setSavedRecentlyKey(key)
+      setTimeout(() => {
+        setSavedRecentlyKey(curr => (curr === key ? null : curr))
+      }, 1500)
+    } catch (err: any) {
+      alert(`Error de red: ${err?.message ?? 'desconocido'}`)
+    } finally {
+      setSavingCostKey(null)
+    }
+  }
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -422,12 +519,31 @@ function ProductosView() {
             <span>+</span>
             <span>Producto manual</span>
           </button>
+          <button
+            className={`btn-edit-costs ${editingCosts ? 'btn-edit-costs-active' : ''}`}
+            onClick={() => setEditingCosts(v => !v)}
+            title="Activá la edición inline de costos en la tabla"
+          >
+            <span>{editingCosts ? '✓' : '💰'}</span>
+            <span>{editingCosts ? 'Listo' : 'Modificar costos'}</span>
+          </button>
           <button className="btn-refresh" onClick={handleRefresh} disabled={refrescando}>
             <span>{refrescando ? '⏳' : '⟳'}</span>
             <span>{refrescando ? 'Sincronizando...' : 'Actualizar stock'}</span>
           </button>
         </div>
       </div>
+
+      {editingCosts && (
+        <div className="edit-costs-banner">
+          <span className="banner-icon">💡</span>
+          <div className="banner-text">
+            <strong>Modo edición de costos activo.</strong> Los costos se guardan al apretar Enter o salir del campo.
+            Cambiá el IVA con el dropdown chiquito al lado.
+          </div>
+          <button className="btn-mini" onClick={() => setEditingCosts(false)}>✓ Salir</button>
+        </div>
+      )}
 
       <div className="kpis">
         <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
@@ -539,6 +655,7 @@ function ProductosView() {
               <th>Título / SKU</th>
               <th>Stock</th>
               <th>Vendidos</th>
+              <th>Costo</th>
               <th>Precio</th>
               <th>Envío</th>
               <th>Estado</th>
@@ -555,6 +672,8 @@ function ProductosView() {
               const isManual = !!single.is_manual
 
               if (!isMulti) {
+                const ci = getCostInfo(single)
+                const key = costMapKey(single)
                 return (
                   <tr key={group.key} className={`${stockClass(single.available_quantity)} ${selected.has(single.item_id) ? 'fila-selected' : ''} ${isManual ? 'fila-manual' : ''}`}>
                     <td className="col-check">
@@ -581,9 +700,17 @@ function ProductosView() {
                     </td>
                     <td className="td-stock"><strong>{single.available_quantity}</strong></td>
                     <td className="td-num">{isManual ? '—' : single.sold_quantity}</td>
+                    <CostCell
+                      item={single}
+                      costInfo={ci}
+                      editing={editingCosts}
+                      saving={savingCostKey === key}
+                      saved={savedRecentlyKey === key}
+                      onSave={(c, iva) => handleSaveCost(single, c, iva)}
+                    />
                     <td className="td-num">
                       {isManual
-                        ? (single.cost != null ? <span className="cost-mini">Costo: {formatearPrecio(single.cost, 'ARS')}</span> : <span className="text-dim">—</span>)
+                        ? <span className="text-dim">—</span>
                         : formatearPrecio(single.price, single.currency)
                       }
                     </td>
@@ -650,6 +777,7 @@ function ProductosView() {
                     </td>
                     <td className="td-stock"><strong>{group.totalStock}</strong></td>
                     <td className="td-num">{group.totalSold}</td>
+                    <td className="td-num"><span className="text-dim">—</span></td>
                     <td className="td-num">
                       {group.minPrice === group.maxPrice
                         ? formatearPrecio(group.minPrice, group.currency)
@@ -664,36 +792,48 @@ function ProductosView() {
                       <span className="summary-text">Click ▶ para ver publicaciones</span>
                     </td>
                   </tr>
-                  {isExpanded && group.items.map((item) => (
-                    <tr key={item.item_id} className={`child-row ${stockClass(item.available_quantity)} ${selected.has(item.item_id) ? 'fila-selected' : ''}`}>
-                      <td className="col-check">
-                        <input type="checkbox" checked={selected.has(item.item_id)} onChange={() => toggleSelect(item.item_id)} />
-                      </td>
-                      <td className="col-arrow"></td>
-                      <td className="td-child-thumb"><span className="child-indent">└</span></td>
-                      <td className="td-title">
-                        <div className="title-text-child">{item.item_id}</div>
-                        <div className="sku">{item.title}</div>
-                      </td>
-                      <td className="td-stock"><strong>{item.available_quantity}</strong></td>
-                      <td className="td-num">{item.sold_quantity}</td>
-                      <td className="td-num">{formatearPrecio(item.price, item.currency)}</td>
-                      <td>
-                        <div className="logistic-badges">
-                          <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>{logisticLabel(item.logistic_type)}</span>
-                          {item.is_flex && item.logistic_type !== 'self_service' && (
-                            <span className="logistic-badge logistic-flex">⚡ Flex</span>
+                  {isExpanded && group.items.map((item) => {
+                    const ciChild = getCostInfo(item)
+                    const keyChild = costMapKey(item)
+                    return (
+                      <tr key={item.item_id} className={`child-row ${stockClass(item.available_quantity)} ${selected.has(item.item_id) ? 'fila-selected' : ''}`}>
+                        <td className="col-check">
+                          <input type="checkbox" checked={selected.has(item.item_id)} onChange={() => toggleSelect(item.item_id)} />
+                        </td>
+                        <td className="col-arrow"></td>
+                        <td className="td-child-thumb"><span className="child-indent">└</span></td>
+                        <td className="td-title">
+                          <div className="title-text-child">{item.item_id}</div>
+                          <div className="sku">{item.title}</div>
+                        </td>
+                        <td className="td-stock"><strong>{item.available_quantity}</strong></td>
+                        <td className="td-num">{item.sold_quantity}</td>
+                        <CostCell
+                          item={item}
+                          costInfo={ciChild}
+                          editing={editingCosts}
+                          saving={savingCostKey === keyChild}
+                          saved={savedRecentlyKey === keyChild}
+                          onSave={(c, iva) => handleSaveCost(item, c, iva)}
+                        />
+                        <td className="td-num">{formatearPrecio(item.price, item.currency)}</td>
+                        <td>
+                          <div className="logistic-badges">
+                            <span className={`logistic-badge logistic-${item.logistic_type ?? 'none'}`}>{logisticLabel(item.logistic_type)}</span>
+                            {item.is_flex && item.logistic_type !== 'self_service' && (
+                              <span className="logistic-badge logistic-flex">⚡ Flex</span>
+                            )}
+                          </div>
+                        </td>
+                        <td><span className={`status-badge status-${item.status}`}>{statusLabel(item.status)}</span></td>
+                        <td>
+                          {item.permalink && (
+                            <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
                           )}
-                        </div>
-                      </td>
-                      <td><span className={`status-badge status-${item.status}`}>{statusLabel(item.status)}</span></td>
-                      <td>
-                        {item.permalink && (
-                          <a href={item.permalink} target="_blank" rel="noopener noreferrer" className="btn-ver">Ver →</a>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </>
               )
             })}
@@ -707,6 +847,8 @@ function ProductosView() {
           const single = group.items[0]
           const isManual = !!single.is_manual
           const isSelected = selected.has(single.item_id)
+          const ci = getCostInfo(single)
+          const key = costMapKey(single)
           return (
             <div key={group.key} className={`card-item ${stockClass(single.available_quantity)} ${isSelected ? 'card-selected' : ''} ${isManual ? 'card-manual' : ''}`}>
               <div className="card-top">
@@ -730,11 +872,24 @@ function ProductosView() {
                 <div><span className="stat-label">Vendidos</span> {isManual ? '—' : single.sold_quantity}</div>
                 <div>
                   <span className="stat-label">Precio</span>{' '}
-                  {isManual
-                    ? (single.cost != null ? formatearPrecio(single.cost, 'ARS') : '—')
-                    : formatearPrecio(single.price, single.currency)
-                  }
+                  {isManual ? '—' : formatearPrecio(single.price, single.currency)}
                 </div>
+              </div>
+              <div className="card-cost-row">
+                <span className="stat-label">Costo</span>
+                {editingCosts ? (
+                  <CostCellMobile
+                    item={single}
+                    costInfo={ci}
+                    saving={savingCostKey === key}
+                    saved={savedRecentlyKey === key}
+                    onSave={(c, iva) => handleSaveCost(single, c, iva)}
+                  />
+                ) : (
+                  ci.cost != null ? (
+                    <span><strong>{formatearPrecio(ci.cost, 'ARS')}</strong> <span className="cost-iva-hint">+ {ci.iva_rate}% IVA</span></span>
+                  ) : <span className="text-dim">— sin costo</span>
+                )}
               </div>
               <div className="card-bottom">
                 {isManual ? (
@@ -790,9 +945,22 @@ function ProductosView() {
         .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
         .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
+        .btn-edit-costs { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.4); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
+        .btn-edit-costs:hover { background: rgba(255, 167, 38, 0.08); border-color: var(--warning); }
+        .btn-edit-costs.btn-edit-costs-active { background: var(--warning); color: var(--bg-base); border-color: var(--warning); box-shadow: 0 4px 14px rgba(255, 167, 38, 0.25); }
+        .btn-edit-costs span:first-child { font-size: 14px; line-height: 1; }
         .btn-refresh { display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 11px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); transition: all 0.15s ease; white-space: nowrap; }
         .btn-refresh:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4); }
         .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .edit-costs-banner {
+          display: flex; align-items: center; gap: 10px;
+          background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3);
+          border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; flex-wrap: wrap;
+        }
+        .banner-icon { font-size: 18px; flex-shrink: 0; }
+        .banner-text { flex: 1; font-size: 13px; color: var(--text-secondary); line-height: 1.5; min-width: 220px; }
+        .banner-text strong { color: var(--warning); }
 
         .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
         .kpi { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden; }
@@ -863,7 +1031,6 @@ function ProductosView() {
 
         .td-stock strong { font-size: 15px; color: var(--text-primary); }
         .td-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-        .cost-mini { font-size: 11px; color: var(--text-muted); }
         .text-dim { color: var(--text-dim); }
         .td-child-thumb { color: var(--text-dim); padding-left: 24px !important; }
         .child-indent { color: var(--text-dim); }
@@ -886,6 +1053,7 @@ function ProductosView() {
         .btn-mini-danger:hover { border-color: rgba(255, 71, 87, 0.4); color: var(--danger); }
 
         .cards-mobile { display: none; }
+        .card-cost-row { display: none; }
 
         .paginacion { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 24px; }
         .paginacion button { background: var(--bg-card); border: 1px solid var(--border-subtle); color: var(--text-secondary); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; font-family: inherit; }
@@ -898,7 +1066,7 @@ function ProductosView() {
           .header { flex-direction: column; align-items: stretch; gap: 12px; }
           .header h1 { font-size: 22px; }
           .header-actions { flex-direction: column; }
-          .btn-create-manual, .btn-refresh { width: 100%; justify-content: center; }
+          .btn-create-manual, .btn-edit-costs, .btn-refresh { width: 100%; justify-content: center; }
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
           .top-toggles { flex-direction: column; }
@@ -916,8 +1084,175 @@ function ProductosView() {
           .card-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-secondary); }
           .card-stats strong { color: var(--text-primary); }
           .stat-label { display: block; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+          .card-cost-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-secondary); }
+          .card-cost-row strong { color: var(--text-primary); font-weight: 600; }
           .card-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; flex-wrap: wrap; gap: 8px; }
         }
+      `}</style>
+    </div>
+  )
+}
+
+// ============================================================
+// CELDA DE COSTO (con modo lectura y modo edición)
+// ============================================================
+function CostCell({
+  item, costInfo, editing, saving, saved, onSave,
+}: {
+  item: Item
+  costInfo: CostInfo
+  editing: boolean
+  saving: boolean
+  saved: boolean
+  onSave: (cost: number | null, ivaRate: number) => void
+}) {
+  const [costInput, setCostInput] = useState(costInfo.cost != null ? String(costInfo.cost) : '')
+
+  useEffect(() => {
+    setCostInput(costInfo.cost != null ? String(costInfo.cost) : '')
+  }, [costInfo.cost])
+
+  const trySave = (newCostStr: string, newIva: number) => {
+    const trimmed = newCostStr.trim()
+    const newCost = trimmed === '' ? null : parseFloat(trimmed)
+    if (newCost !== null && (!Number.isFinite(newCost) || newCost < 0)) return
+    if (newCost === costInfo.cost && newIva === costInfo.iva_rate) return
+    onSave(newCost, newIva)
+  }
+
+  if (!editing) {
+    return (
+      <td className="td-num td-cost">
+        {costInfo.cost != null ? (
+          <>
+            <div className="cost-value">{formatearPrecio(costInfo.cost, 'ARS')}</div>
+            <div className="cost-iva-hint">+ {costInfo.iva_rate}% IVA</div>
+          </>
+        ) : <span className="text-dim">—</span>}
+        <style jsx>{`
+          .td-cost { white-space: nowrap; }
+          .cost-value { font-weight: 500; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+          .cost-iva-hint { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+          .text-dim { color: var(--text-dim); }
+        `}</style>
+      </td>
+    )
+  }
+
+  return (
+    <td className="td-cost-edit">
+      <div className="cost-edit-wrap">
+        <div className="cost-input-row">
+          <span className="cost-prefix">$</span>
+          <input
+            type="number"
+            min={0}
+            step={0.01}
+            value={costInput}
+            onChange={e => setCostInput(e.target.value)}
+            onBlur={() => trySave(costInput, costInfo.iva_rate)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') {
+                setCostInput(costInfo.cost != null ? String(costInfo.cost) : '')
+                ;(e.target as HTMLInputElement).blur()
+              }
+            }}
+            placeholder="—"
+            disabled={saving}
+            className="cost-input"
+          />
+          {saving && <span className="cost-state">⏳</span>}
+          {!saving && saved && <span className="cost-state cost-saved">✓</span>}
+        </div>
+        <select
+          value={String(costInfo.iva_rate)}
+          onChange={e => trySave(costInput, parseFloat(e.target.value))}
+          disabled={saving}
+          className="cost-iva-select"
+        >
+          <option value="21">21% IVA</option>
+          <option value="10.5">10.5% IVA</option>
+          <option value="27">27% IVA</option>
+          <option value="0">0% IVA</option>
+        </select>
+      </div>
+      <style jsx>{`
+        .td-cost-edit { padding: 8px 12px !important; min-width: 130px; }
+        .cost-edit-wrap { display: flex; flex-direction: column; gap: 4px; }
+        .cost-input-row { display: flex; align-items: center; gap: 4px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 0 6px; transition: border-color 0.15s ease; }
+        .cost-input-row:focus-within { border-color: var(--warning); }
+        .cost-prefix { color: var(--text-muted); font-size: 12px; }
+        .cost-input { flex: 1; min-width: 0; width: 70px; background: transparent; border: none; color: var(--text-primary); font-size: 13px; font-family: inherit; outline: none; padding: 6px 0; font-variant-numeric: tabular-nums; }
+        .cost-input::-webkit-outer-spin-button, .cost-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .cost-input[type=number] { -moz-appearance: textfield; }
+        .cost-state { font-size: 12px; flex-shrink: 0; }
+        .cost-saved { color: var(--success); }
+        .cost-iva-select { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); font-size: 11px; padding: 3px 4px; cursor: pointer; font-family: inherit; outline: none; }
+        .cost-iva-select:focus { border-color: var(--warning); }
+      `}</style>
+    </td>
+  )
+}
+
+// Versión mobile (sin <td>)
+function CostCellMobile({
+  item, costInfo, saving, saved, onSave,
+}: {
+  item: Item
+  costInfo: CostInfo
+  saving: boolean
+  saved: boolean
+  onSave: (cost: number | null, ivaRate: number) => void
+}) {
+  const [costInput, setCostInput] = useState(costInfo.cost != null ? String(costInfo.cost) : '')
+
+  useEffect(() => {
+    setCostInput(costInfo.cost != null ? String(costInfo.cost) : '')
+  }, [costInfo.cost])
+
+  const trySave = (newCostStr: string, newIva: number) => {
+    const trimmed = newCostStr.trim()
+    const newCost = trimmed === '' ? null : parseFloat(trimmed)
+    if (newCost !== null && (!Number.isFinite(newCost) || newCost < 0)) return
+    if (newCost === costInfo.cost && newIva === costInfo.iva_rate) return
+    onSave(newCost, newIva)
+  }
+
+  return (
+    <div className="cost-mobile-wrap">
+      <div className="cost-mobile-row">
+        <span className="cost-prefix">$</span>
+        <input
+          type="number"
+          min={0}
+          step={0.01}
+          value={costInput}
+          onChange={e => setCostInput(e.target.value)}
+          onBlur={() => trySave(costInput, costInfo.iva_rate)}
+          placeholder="Sin costo"
+          disabled={saving}
+        />
+        <select
+          value={String(costInfo.iva_rate)}
+          onChange={e => trySave(costInput, parseFloat(e.target.value))}
+          disabled={saving}
+        >
+          <option value="21">21%</option>
+          <option value="10.5">10.5%</option>
+          <option value="27">27%</option>
+          <option value="0">0%</option>
+        </select>
+        {saving && <span>⏳</span>}
+        {!saving && saved && <span style={{ color: 'var(--success)' }}>✓</span>}
+      </div>
+      <style jsx>{`
+        .cost-mobile-wrap { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+        .cost-mobile-row { display: flex; align-items: center; gap: 6px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 6px 10px; }
+        .cost-mobile-row:focus-within { border-color: var(--warning); }
+        .cost-prefix { color: var(--text-muted); font-size: 13px; }
+        .cost-mobile-row input { flex: 1; background: transparent; border: none; color: var(--text-primary); font-size: 14px; font-family: inherit; outline: none; min-width: 0; }
+        .cost-mobile-row select { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); font-size: 12px; padding: 4px; cursor: pointer; font-family: inherit; outline: none; }
       `}</style>
     </div>
   )
@@ -931,6 +1266,7 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
   const [title, setTitle] = useState('')
   const [stock, setStock] = useState('0')
   const [cost, setCost] = useState('')
+  const [ivaRate, setIvaRate] = useState('21')
   const [loading, setLoading] = useState(!!editingSku)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -951,6 +1287,7 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
           setTitle(item.title)
           setStock(String(item.available_quantity))
           setCost(item.cost != null ? String(item.cost) : '')
+          setIvaRate(item.iva_rate != null ? String(item.iva_rate) : '21')
         }
       } catch (err) {
         if (!cancelled) setError('Error cargando datos del producto')
@@ -968,11 +1305,13 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
     const titleTrim = title.trim()
     const stockNum = parseInt(stock, 10)
     const costNum = cost.trim() === '' ? null : parseFloat(cost)
+    const ivaNum = parseFloat(ivaRate)
 
     if (!skuTrim) { setError('El SKU es requerido'); return }
     if (!titleTrim) { setError('El título es requerido'); return }
     if (!Number.isInteger(stockNum) || stockNum < 0) { setError('El stock debe ser un número entero ≥ 0'); return }
     if (costNum !== null && (isNaN(costNum) || costNum < 0)) { setError('El costo debe ser un número ≥ 0'); return }
+    if (!Number.isFinite(ivaNum) || ivaNum < 0 || ivaNum > 100) { setError('IVA inválido'); return }
 
     setSaving(true)
     try {
@@ -984,6 +1323,7 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
           title: titleTrim,
           available_quantity: stockNum,
           cost: costNum,
+          iva_rate: ivaNum,
           is_edit: isEdit,
         }),
       })
@@ -1056,17 +1396,27 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
                   />
                 </div>
                 <div>
-                  <label className="form-label">Costo unitario (opcional)</label>
+                  <label className="form-label">Costo unitario (sin IVA)</label>
                   <input
                     type="number"
                     min={0}
                     step={0.01}
                     value={cost}
                     onChange={(e) => setCost(e.target.value)}
-                    placeholder="ARS"
+                    placeholder="ARS, opcional"
                     className="form-input"
                   />
                 </div>
+              </div>
+
+              <div className="form-row">
+                <label className="form-label">IVA aplicable</label>
+                <select value={ivaRate} onChange={e => setIvaRate(e.target.value)} className="form-input">
+                  <option value="21">21% (general)</option>
+                  <option value="10.5">10.5% (reducido)</option>
+                  <option value="27">27% (servicios)</option>
+                  <option value="0">0% (exento)</option>
+                </select>
               </div>
             </>
           )}
