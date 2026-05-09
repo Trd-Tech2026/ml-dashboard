@@ -92,9 +92,9 @@ export default function RentabilidadView({
   }
 
   const periodos = [
-    { value: 'hoy', label: 'Hoy', icon: '📅' },
-    { value: 'semana', label: 'Esta semana', icon: '🗓️' },
-    { value: 'mes', label: 'Este mes', icon: '📆' },
+    { value: 'hoy', label: 'Hoy' },
+    { value: 'semana', label: 'Esta semana' },
+    { value: 'mes', label: 'Este mes' },
   ]
 
   const mejorDiaFormatted = calcActual.mejorDiaFecha
@@ -107,7 +107,7 @@ export default function RentabilidadView({
     <div className="page">
       <div className="header">
         <div className="header-title">
-          <h1>💰 Rentabilidad</h1>
+          <h1>Rentabilidad</h1>
           <p className="subtitle">Cálculo fiscal completo · Responsable Inscripto</p>
         </div>
         <div className="header-actions">
@@ -156,8 +156,7 @@ export default function RentabilidadView({
                   href={`/rentabilidad?period=${p.value}`}
                   className={`period-tab ${activo ? 'period-active' : ''}`}
                 >
-                  <span>{p.icon}</span>
-                  <span>{p.label}</span>
+                  {p.label}
                 </Link>
               )
             })}
@@ -175,158 +174,172 @@ export default function RentabilidadView({
             </div>
           )}
 
-          <div className={`hero ${calcActual.ganancia >= 0 ? 'hero-positive' : 'hero-negative'}`}>
-            <div className="hero-bg">
-              <div className="hero-orb orb-1" />
-              <div className="hero-orb orb-2" />
-              <div className="hero-orb orb-3" />
-            </div>
-            <div className="hero-content">
+          {/* HERO TRDTECH cyan palpitante */}
+          <div className={`hero-trd ${calcActual.ganancia >= 0 ? 'hero-pos' : 'hero-neg'}`}>
+            <div className="hero-orb orb-1" />
+            <div className="hero-orb orb-2" />
+
+            <div className="hero-row">
               <div className="hero-left">
-                <div className="hero-emoji">{calcActual.ganancia >= 0 ? '🚀' : '⚠️'}</div>
-                <div>
-                  <div className="hero-label">
-                    GANANCIA NETA · {labelPeriodo.toUpperCase()}
-                    {period === 'hoy' && <span className="badge-live">EN VIVO</span>}
-                  </div>
-                  <div className="hero-amount">{formatARSSigned(calcActual.ganancia)}</div>
-                  <div className="hero-subamount">después de IVA, comisiones, retenciones e impuestos</div>
-                  <div className="hero-cambio">{renderCambio(cambioGanancia, labelComparacion)}</div>
+                <div className="hero-label">
+                  GANANCIA NETA · {labelPeriodo.toUpperCase()}
+                  {period === 'hoy' && (
+                    <span className="badge-live">
+                      <span className="live-dot" />
+                      EN VIVO
+                    </span>
+                  )}
+                </div>
+                <div className="hero-amount">{formatARSSigned(calcActual.ganancia)}</div>
+                <div className="hero-sub">
+                  {formatARSFull(calcActual.ganancia)} · después de IVA, comisiones, retenciones
+                </div>
+                <div className="hero-cambio">
+                  {renderCambio(cambioGanancia, labelComparacion)}
                 </div>
               </div>
+
               <div className="hero-right">
-                <div className="hero-margen-label">MARGEN REAL</div>
-                <div className="hero-margen-value">{calcActual.ingresosNetos > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}</div>
-                <div className="hero-margen-tag">{margenLabel}</div>
-                <div className="hero-cambio">{renderCambio(cambioMargen, labelComparacion)}</div>
-              </div>
-            </div>
-
-            <div className="breakdown">
-              <div className="breakdown-section">
-                <div className="breakdown-section-title">📊 Operativo (sin IVA)</div>
-                <div className="breakdown-grid">
-                  <div className="bk-row bk-row-positive">
-                    <span className="bk-label">+ INGRESOS NETOS</span>
-                    <span className="bk-value bk-value-positive">{formatARS(calcActual.ingresosNetos)}</span>
-                    <span className="bk-detail">{calcActual.ventas} {calcActual.ventas === 1 ? 'venta' : 'ventas'} · sin IVA</span>
-                  </div>
-                  <div className="bk-row">
-                    <span className="bk-label">− COSTO MERCA</span>
-                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.costoMerca)}</span>
-                    <span className="bk-detail">
-                      {calcActual.coberturaCosto < 100 ? (
-                        <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
-                          cobertura {calcActual.coberturaCosto.toFixed(0)}%
-                        </button>
-                      ) : 'cobertura 100%'}
-                    </span>
-                  </div>
-                  <div className="bk-row">
-                    <span className="bk-label">− CARGOS ML</span>
-                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.cargosML)}</span>
-                    <span className="bk-detail">{calcActual.comisionPct.toFixed(1)}% sobre venta</span>
-                  </div>
-                  <div className="bk-row">
-                    <span className="bk-label">− RETENCIONES ML</span>
-                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.retenciones)}</span>
-                    <span className="bk-detail">IIBB + créd/déb</span>
-                  </div>
-                  <div className="bk-row bk-row-positive">
-                    <span className="bk-label">+ BONIFICACIÓN ENVÍO</span>
-                    <span className="bk-value bk-value-positive">+{formatARS(calcActual.bonificacionEnvio)}</span>
-                    <span className="bk-detail">{calcActual.flexCount} ventas Flex</span>
-                  </div>
-                  <div className="bk-row">
-                    <span className="bk-label">− PUBLICIDAD</span>
-                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.publicidad)}</span>
-                    <span className="bk-detail">
-                      <button className="link-btn" onClick={() => setAdsModalOpen(true)}>
-                        {calcActual.publicidad === 0 ? '📊 cargar' : '📊 ver/editar'}
-                      </button>
-                    </span>
-                  </div>
-                  <div className="bk-row">
-                    <span className="bk-label">− GASTOS VARIOS</span>
-                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.gastosVarios)}</span>
-                    <span className="bk-detail">
-                      <button className="link-btn" onClick={() => setGastoModalOpen(true)}>
-                        {calcActual.gastosVarios === 0 ? '💸 cargar' : '💸 ver/editar'}
-                      </button>
-                    </span>
-                  </div>
-                  <div className="bk-row bk-row-subtotal">
-                    <span className="bk-label">= GANANCIA OPERATIVA</span>
-                    <span className={`bk-value ${calcActual.gananciaOperativa >= 0 ? 'bk-value-positive' : 'bk-value-negative'}`}>
-                      {formatARSSigned(calcActual.gananciaOperativa)}
-                    </span>
-                    <span className="bk-detail">margen {calcActual.margenOperativo.toFixed(1)}%</span>
-                  </div>
+                <div className="hero-label-r">MARGEN REAL</div>
+                <div className="hero-margen">
+                  {calcActual.ingresosNetos > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}
                 </div>
-              </div>
-
-              <div className="breakdown-section breakdown-iva">
-                <div className="breakdown-section-title">📋 IVA (Responsable Inscripto)</div>
-                <div className="breakdown-grid">
-                  <div className="bk-row">
-                    <span className="bk-label">IVA DÉBITO</span>
-                    <span className="bk-value">{formatARS(calcActual.ivaDebito)}</span>
-                    <span className="bk-detail">21% del precio (cobrado al cliente)</span>
-                  </div>
-                  <div className="bk-row">
-                    <span className="bk-label">− IVA CRÉDITO</span>
-                    <span className="bk-value bk-value-positive">−{formatARS(calcActual.ivaCredito)}</span>
-                    <span className="bk-detail">{calcActual.coberturaCosto.toFixed(0)}% costos cargados</span>
-                  </div>
-                  <div className="bk-row bk-row-subtotal">
-                    <span className="bk-label">{calcActual.ivaAPagar >= 0 ? '= IVA A PAGAR' : '= SALDO IVA A FAVOR'}</span>
-                    <span className={`bk-value ${calcActual.ivaAPagar > 0 ? 'bk-value-negative' : 'bk-value-positive'}`}>
-                      {formatARSSigned(calcActual.ivaAPagar)}
-                    </span>
-                    <span className="bk-detail">débito − crédito</span>
-                  </div>
+                <div className="hero-tag">{margenLabel}</div>
+                <div className="hero-cambio">
+                  {renderCambio(cambioMargen, labelComparacion)}
                 </div>
               </div>
             </div>
           </div>
 
+          {/* BREAKDOWN: 2 cuadros separados abajo */}
+          <div className="breakdown-row">
+            <div className="bk-card">
+              <div className="bk-card-title">OPERATIVO (sin IVA)</div>
+              <div className="bk-list">
+                <div className="bk-row">
+                  <span className="bk-label">Ingresos netos</span>
+                  <span className="bk-value bk-value-pos">+{formatARS(calcActual.ingresosNetos)}</span>
+                  <span className="bk-detail">{calcActual.ventas} {calcActual.ventas === 1 ? 'venta' : 'ventas'} · sin IVA</span>
+                </div>
+                <div className="bk-row">
+                  <span className="bk-label">Costo merca</span>
+                  <span className="bk-value">−{formatARS(calcActual.costoMerca)}</span>
+                  <span className="bk-detail">
+                    {calcActual.coberturaCosto < 100 ? (
+                      <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
+                        cobertura {calcActual.coberturaCosto.toFixed(0)}%
+                      </button>
+                    ) : 'cobertura 100%'}
+                  </span>
+                </div>
+                <div className="bk-row">
+                  <span className="bk-label">Cargos ML</span>
+                  <span className="bk-value">−{formatARS(calcActual.cargosML)}</span>
+                  <span className="bk-detail">{calcActual.comisionPct.toFixed(1)}% sobre venta</span>
+                </div>
+                <div className="bk-row">
+                  <span className="bk-label">Retenciones ML</span>
+                  <span className="bk-value">−{formatARS(calcActual.retenciones)}</span>
+                  <span className="bk-detail">IIBB + créd/déb</span>
+                </div>
+                <div className="bk-row">
+                  <span className="bk-label">Bonificación envío</span>
+                  <span className="bk-value bk-value-pos">+{formatARS(calcActual.bonificacionEnvio)}</span>
+                  <span className="bk-detail">{calcActual.flexCount} ventas Flex</span>
+                </div>
+                <div className="bk-row">
+                  <span className="bk-label">Publicidad</span>
+                  <span className="bk-value">−{formatARS(calcActual.publicidad)}</span>
+                  <span className="bk-detail">
+                    <button className="link-btn" onClick={() => setAdsModalOpen(true)}>
+                      {calcActual.publicidad === 0 ? 'cargar' : 'editar'}
+                    </button>
+                  </span>
+                </div>
+                <div className="bk-row">
+                  <span className="bk-label">Gastos varios</span>
+                  <span className="bk-value">−{formatARS(calcActual.gastosVarios)}</span>
+                  <span className="bk-detail">
+                    <button className="link-btn" onClick={() => setGastoModalOpen(true)}>
+                      {calcActual.gastosVarios === 0 ? 'cargar' : 'editar'}
+                    </button>
+                  </span>
+                </div>
+                <div className="bk-row bk-row-total">
+                  <span className="bk-label-total">= Ganancia operativa</span>
+                  <span className={`bk-value-total ${calcActual.gananciaOperativa >= 0 ? 'bk-value-pos' : 'bk-value-neg'}`}>
+                    {formatARSSigned(calcActual.gananciaOperativa)}
+                  </span>
+                  <span className="bk-detail">margen {calcActual.margenOperativo.toFixed(1)}%</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bk-card">
+              <div className="bk-card-title">IVA (Resp. Inscripto)</div>
+              <div className="bk-list">
+                <div className="bk-row bk-row-iva">
+                  <span className="bk-label">IVA débito</span>
+                  <span className="bk-value">{formatARS(calcActual.ivaDebito)}</span>
+                </div>
+                <div className="bk-row bk-row-iva">
+                  <span className="bk-label">IVA crédito</span>
+                  <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCredito)}</span>
+                </div>
+                <div className="bk-row bk-row-total bk-row-iva">
+                  <span className="bk-label-total">
+                    = {calcActual.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}
+                  </span>
+                  <span className={`bk-value-total ${calcActual.ivaAPagar > 0 ? 'bk-value-neg' : 'bk-value-pos'}`}>
+                    {formatARSSigned(calcActual.ivaAPagar)}
+                  </span>
+                </div>
+              </div>
+              <div className="bk-card-hint">
+                21% sobre el precio (cobrado al cliente) menos lo que pagaste de IVA al comprar la mercadería.
+              </div>
+            </div>
+          </div>
+
+          {/* MINI CARDS abajo */}
           <div className="mini-cards">
             <div className="mini-card">
-              <div className="mini-label">🛒 VENTAS</div>
+              <div className="mini-label">VENTAS</div>
               <div className="mini-value">{calcActual.ventas}</div>
               <div className="mini-detail">{renderCambio(cambioVentas, labelComparacion)}</div>
             </div>
             <div className="mini-card">
-              <div className="mini-label">📦 UNIDADES</div>
+              <div className="mini-label">UNIDADES</div>
               <div className="mini-value">{calcActual.unidades}</div>
               <div className="mini-detail">
                 {calcActual.ventas > 0 ? `${(calcActual.unidades / calcActual.ventas).toFixed(1)} u/venta` : '—'}
               </div>
             </div>
             <div className="mini-card">
-              <div className="mini-label">🎫 TICKET PROM.</div>
+              <div className="mini-label">TICKET PROM.</div>
               <div className="mini-value">{formatARS(calcActual.ticketPromedio)}</div>
-              <div className="mini-detail">por venta (con IVA)</div>
+              <div className="mini-detail">por venta</div>
             </div>
             <div className="mini-card">
-              <div className="mini-label">📅 DÍAS ACTIVOS</div>
+              <div className="mini-label">DÍAS ACTIVOS</div>
               <div className="mini-value">{calcActual.diasActivos} <span className="mini-fraction">/ {calcActual.diasTotales}</span></div>
               <div className="mini-detail">
                 {calcActual.diasTotales > 0 ? `${((calcActual.diasActivos / calcActual.diasTotales) * 100).toFixed(0)}% del período` : '—'}
               </div>
             </div>
             <div className="mini-card">
-              <div className="mini-label">🏆 MEJOR DÍA</div>
+              <div className="mini-label">MEJOR DÍA</div>
               <div className="mini-value">{calcActual.mejorDiaMonto > 0 ? formatARS(calcActual.mejorDiaMonto) : '—'}</div>
               <div className="mini-detail">{mejorDiaFormatted}</div>
             </div>
             <div className="mini-card">
-              <div className="mini-label">📈 ROAS</div>
+              <div className="mini-label">ROAS</div>
               <div className={`mini-value ${calcActual.publicidad > 0 ? 'mini-roas' : 'mini-disabled'}`}>
                 {calcActual.publicidad > 0 ? `×${calcActual.roas.toFixed(1)}` : '—'}
               </div>
               <div className="mini-detail">
-                {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin gasto cargado'}
+                {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin Ads cargado'}
               </div>
             </div>
           </div>
@@ -350,7 +363,7 @@ export default function RentabilidadView({
       <style jsx>{`
         .page { padding: 24px 40px 48px; max-width: 1500px; margin: 0 auto; }
         .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; gap: 16px; flex-wrap: wrap; }
-        .header-title h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; color: var(--text-primary); }
+        .header-title h1 { margin: 0 0 4px; font-size: 26px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.3px; }
         .subtitle { margin: 0; font-size: 13px; color: var(--text-muted); }
         .header-actions { display: flex; gap: 6px; flex-wrap: wrap; }
         .btn-action {
@@ -373,20 +386,21 @@ export default function RentabilidadView({
           border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.15s ease;
         }
         .main-tab:hover { color: var(--text-secondary); }
-        .main-tab.main-tab-active { color: var(--accent); border-bottom-color: var(--accent); }
+        .main-tab.main-tab-active { color: #3ee5e0; border-bottom-color: #3ee5e0; }
 
         .period-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
         .period-tab {
-          display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px;
-          border-radius: 10px; font-size: 13px; font-weight: 600; background: var(--bg-card);
-          color: var(--text-secondary); border: 1px solid var(--border-subtle); text-decoration: none;
+          display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+          border-radius: 8px; font-size: 13px; font-weight: 500;
+          background: rgba(28, 160, 196, 0.06); color: var(--text-muted);
+          border: 1px solid rgba(62, 229, 224, 0.1); text-decoration: none;
           transition: all 0.15s ease;
         }
-        .period-tab:hover { border-color: var(--border-medium); color: var(--text-primary); }
+        .period-tab:hover { border-color: rgba(62, 229, 224, 0.3); color: #94e8e6; }
         .period-tab.period-active {
-          background: linear-gradient(135deg, #f59e0b, #fbbf24);
-          color: #1a1a1a; border-color: #fbbf24;
-          box-shadow: 0 4px 14px rgba(245, 158, 11, 0.25);
+          background: linear-gradient(135deg, #0d4d6e, #1ca0c4);
+          color: #ffffff; border-color: rgba(62, 229, 224, 0.4);
+          box-shadow: 0 0 14px rgba(28, 160, 196, 0.25);
         }
 
         .warn-banner {
@@ -400,120 +414,243 @@ export default function RentabilidadView({
         .warn-link { color: var(--warning); font-weight: 600; }
         .warn-link:hover { text-decoration: underline; }
 
-        .hero {
-          position: relative; background: var(--bg-card); border: 1px solid var(--border-subtle);
-          border-radius: 18px; padding: 36px 40px 28px; margin-bottom: 24px; overflow: hidden;
+        /* HERO PALPITANTE */
+        @keyframes palpitar-trd {
+          0%, 100% {
+            border-color: rgba(62, 229, 224, 0.25);
+            box-shadow: 0 0 0 0 rgba(62, 229, 224, 0.15), 0 0 60px rgba(28, 160, 196, 0.06);
+          }
+          50% {
+            border-color: rgba(62, 229, 224, 0.55);
+            box-shadow: 0 0 0 4px rgba(62, 229, 224, 0.05), 0 0 80px rgba(28, 160, 196, 0.18);
+          }
         }
-        .hero-positive {
-          background: linear-gradient(135deg, rgba(168, 85, 247, 0.06) 0%, rgba(236, 72, 153, 0.04) 100%);
-          border-color: rgba(168, 85, 247, 0.35);
-          box-shadow: 0 0 60px rgba(168, 85, 247, 0.08);
+        .hero-trd {
+          position: relative;
+          background: linear-gradient(135deg, rgba(13, 77, 110, 0.2) 0%, rgba(28, 160, 196, 0.06) 100%);
+          border: 1px solid rgba(62, 229, 224, 0.3);
+          border-radius: 18px;
+          padding: 32px 36px;
+          margin-bottom: 16px;
+          overflow: hidden;
+          animation: palpitar-trd 2.8s ease-in-out infinite;
         }
-        .hero-negative {
-          background: linear-gradient(135deg, rgba(239, 68, 68, 0.06) 0%, rgba(248, 113, 113, 0.04) 100%);
+        .hero-neg {
+          background: linear-gradient(135deg, rgba(127, 29, 29, 0.18) 0%, rgba(220, 38, 38, 0.06) 100%);
+          animation: none;
           border-color: rgba(239, 68, 68, 0.35);
-          box-shadow: 0 0 60px rgba(239, 68, 68, 0.08);
         }
-        .hero-bg { position: absolute; inset: 0; pointer-events: none; }
-        .hero-orb { position: absolute; border-radius: 50%; filter: blur(40px); opacity: 0.5; }
-        .hero-positive .orb-1 { background: rgba(168, 85, 247, 0.4); width: 200px; height: 200px; top: -50px; left: 30%; }
-        .hero-positive .orb-2 { background: rgba(236, 72, 153, 0.3); width: 150px; height: 150px; bottom: -30px; right: 20%; }
-        .hero-positive .orb-3 { background: rgba(99, 102, 241, 0.3); width: 120px; height: 120px; top: 40%; right: 10%; }
-        .hero-negative .orb-1 { background: rgba(239, 68, 68, 0.4); width: 200px; height: 200px; top: -50px; left: 30%; }
-        .hero-negative .orb-2 { background: rgba(248, 113, 113, 0.3); width: 150px; height: 150px; bottom: -30px; right: 20%; }
-        .hero-negative .orb-3 { background: rgba(220, 38, 38, 0.3); width: 120px; height: 120px; top: 40%; right: 10%; }
+        .hero-orb { position: absolute; border-radius: 50%; filter: blur(60px); pointer-events: none; }
+        .orb-1 {
+          background: rgba(28, 160, 196, 0.18);
+          width: 220px; height: 220px;
+          top: -50px; left: 30%;
+        }
+        .orb-2 {
+          background: rgba(62, 229, 224, 0.12);
+          width: 180px; height: 180px;
+          bottom: -40px; right: 18%;
+        }
+        .hero-neg .orb-1 { background: rgba(239, 68, 68, 0.25); }
+        .hero-neg .orb-2 { background: rgba(220, 38, 38, 0.18); }
 
-        .hero-content {
-          position: relative; display: flex; justify-content: space-between; align-items: flex-start;
-          gap: 20px; margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--border-subtle);
+        .hero-row {
+          position: relative;
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
           flex-wrap: wrap;
         }
-        .hero-left { display: flex; gap: 18px; align-items: flex-start; flex: 1; min-width: 280px; }
-        .hero-emoji { font-size: 56px; line-height: 1; flex-shrink: 0; filter: drop-shadow(0 0 20px rgba(168, 85, 247, 0.4)); }
+        .hero-left { flex: 1; min-width: 260px; }
         .hero-label {
-          font-size: 11px; color: var(--text-muted); letter-spacing: 1.5px;
-          margin-bottom: 6px; font-weight: 700; display: flex; align-items: center; gap: 10px;
+          display: flex; align-items: center; gap: 10px;
+          font-size: 11px; letter-spacing: 1.5px; color: var(--text-muted);
+          font-weight: 500; margin-bottom: 12px;
         }
         .badge-live {
-          display: inline-flex; align-items: center; gap: 4px;
-          background: rgba(239, 68, 68, 0.15); color: #f87171;
-          border: 1px solid rgba(239, 68, 68, 0.35); padding: 2px 8px; border-radius: 12px;
-          font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+          display: inline-flex; align-items: center; gap: 5px;
+          background: rgba(239, 68, 68, 0.12); color: #f87171;
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          padding: 3px 9px; border-radius: 12px;
+          font-size: 9px; font-weight: 500; letter-spacing: 0.5px;
         }
-        .badge-live::before { content: ''; width: 6px; height: 6px; background: #f87171; border-radius: 50%; animation: pulse 2s ease-in-out infinite; }
-        @keyframes pulse { 50% { opacity: 0.4; } }
+        .live-dot {
+          width: 6px; height: 6px; background: #f87171;
+          border-radius: 50%; display: inline-block;
+          animation: pulse-dot 2s ease-in-out infinite;
+        }
+        @keyframes pulse-dot { 50% { opacity: 0.4; } }
+
         .hero-amount {
-          font-size: 56px; font-weight: 800; color: var(--text-primary); line-height: 1;
+          font-size: 60px;
+          font-weight: 500;
+          line-height: 1;
+          color: #3ee5e0;
           font-variant-numeric: tabular-nums;
-          background: linear-gradient(135deg, #c084fc 0%, #f472b6 100%);
-          -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+          letter-spacing: -1.5px;
+          margin-bottom: 8px;
+        }
+        .hero-neg .hero-amount { color: #f87171; }
+        .hero-sub {
+          font-size: 12px;
+          color: var(--text-muted);
           margin-bottom: 6px;
         }
-        .hero-negative .hero-amount {
-          background: linear-gradient(135deg, #f87171 0%, #fb923c 100%);
-          -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        .hero-cambio {
+          margin-top: 8px;
+          font-size: 12px;
+          font-weight: 500;
         }
-        .hero-subamount { color: var(--text-muted); font-size: 12px; margin-bottom: 4px; }
-        .hero-cambio { margin-top: 8px; font-size: 12px; }
-        .hero-right { text-align: right; }
-        .hero-margen-label { font-size: 11px; color: var(--text-muted); letter-spacing: 1.5px; font-weight: 700; }
-        .hero-margen-value { font-size: 44px; font-weight: 800; color: var(--text-primary); line-height: 1; margin: 6px 0 4px; font-variant-numeric: tabular-nums; }
-        .hero-margen-tag { font-size: 11px; color: var(--accent); letter-spacing: 1px; font-weight: 700; }
 
-        .cambio { font-size: 12px; font-weight: 600; }
+        .hero-right { text-align: right; }
+        .hero-label-r {
+          font-size: 11px; letter-spacing: 1.5px;
+          color: var(--text-muted); font-weight: 500;
+        }
+        .hero-margen {
+          font-size: 38px;
+          font-weight: 500;
+          line-height: 1;
+          color: var(--text-primary);
+          font-variant-numeric: tabular-nums;
+          margin: 8px 0 6px;
+        }
+        .hero-tag {
+          font-size: 11px;
+          color: #3ee5e0;
+          letter-spacing: 1px;
+          font-weight: 500;
+          margin-bottom: 8px;
+        }
+        .hero-neg .hero-tag { color: #f87171; }
+
+        .cambio { font-size: 12px; font-weight: 500; }
         .cambio-good { color: var(--success); }
         .cambio-bad { color: var(--danger); }
         .cambio-flat { color: var(--text-muted); }
 
-        .breakdown {
-          position: relative; display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px;
+        /* BREAKDOWN: 2 cuadros separados abajo */
+        .breakdown-row {
+          display: grid;
+          grid-template-columns: 1.6fr 1fr;
+          gap: 16px;
+          margin-bottom: 16px;
         }
-        .breakdown-section {
-          background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-subtle);
-          border-radius: 14px; padding: 16px 20px;
+        .bk-card {
+          background: rgba(10, 18, 28, 0.6);
+          border: 1px solid rgba(62, 229, 224, 0.12);
+          border-radius: 14px;
+          padding: 18px 22px;
         }
-        .breakdown-iva { background: rgba(168, 85, 247, 0.04); border-color: rgba(168, 85, 247, 0.2); }
-        .breakdown-section-title {
-          font-size: 11px; color: var(--text-muted); letter-spacing: 1px; font-weight: 700;
-          margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);
+        .bk-card-title {
+          font-size: 11px; letter-spacing: 1.2px;
+          color: var(--text-muted); font-weight: 500;
+          margin-bottom: 14px; padding-bottom: 8px;
+          border-bottom: 1px solid rgba(62, 229, 224, 0.08);
         }
-        .breakdown-grid { display: flex; flex-direction: column; gap: 8px; }
+        .bk-list { display: flex; flex-direction: column; gap: 9px; }
         .bk-row {
-          display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: baseline;
-          padding: 4px 0; font-size: 12px;
+          display: grid;
+          grid-template-columns: 1fr auto 90px;
+          align-items: baseline;
+          gap: 16px;
         }
-        .bk-label { color: var(--text-secondary); font-weight: 500; }
+        .bk-row-iva {
+          grid-template-columns: 1fr auto;
+        }
+        .bk-label { font-size: 13px; color: var(--text-secondary); }
         .bk-value {
-          font-weight: 700; font-variant-numeric: tabular-nums;
-          color: var(--text-primary); font-size: 14px; text-align: right; white-space: nowrap;
+          font-size: 14px;
+          font-weight: 500;
+          color: #cbd5e1;
+          font-variant-numeric: tabular-nums;
+          text-align: right;
+          white-space: nowrap;
         }
-        .bk-value-positive { color: var(--success); }
-        .bk-value-negative { color: var(--text-secondary); }
-        .bk-detail { color: var(--text-muted); font-size: 10px; text-align: right; }
-        .bk-row-subtotal {
-          margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+        .bk-value-pos { color: #3ee5e0; }
+        .bk-value-neg { color: #f87171; }
+        .bk-detail {
+          font-size: 10px;
+          color: var(--text-muted);
+          text-align: right;
         }
-        .bk-row-subtotal .bk-label { font-weight: 700; color: var(--text-primary); font-size: 13px; }
-        .bk-row-subtotal .bk-value { font-size: 16px; }
-        .bk-row-positive .bk-value { font-weight: 700; }
+
+        .bk-row-total {
+          margin-top: 4px;
+          padding-top: 11px;
+          border-top: 1px solid rgba(62, 229, 224, 0.12);
+        }
+        .bk-label-total {
+          font-size: 13px;
+          color: var(--text-primary);
+          font-weight: 500;
+        }
+        .bk-value-total {
+          font-size: 17px;
+          font-weight: 500;
+          font-variant-numeric: tabular-nums;
+          text-align: right;
+          white-space: nowrap;
+          color: #cbd5e1;
+        }
+
+        .bk-card-hint {
+          margin-top: 14px;
+          padding-top: 12px;
+          border-top: 1px solid rgba(62, 229, 224, 0.08);
+          font-size: 11px;
+          color: var(--text-muted);
+          line-height: 1.5;
+        }
 
         .link-btn {
-          background: transparent; border: none; color: var(--accent); padding: 0;
+          background: transparent; border: none; color: #1ca0c4; padding: 0;
           font-family: inherit; font-size: 10px; cursor: pointer; text-decoration: underline;
         }
-        .link-btn:hover { color: var(--accent-secondary); }
+        .link-btn:hover { color: #3ee5e0; }
 
-        .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
-        .mini-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; }
-        .mini-label { font-size: 11px; color: var(--text-muted); letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
-        .mini-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
-        .mini-fraction { font-size: 14px; color: var(--text-muted); font-weight: 500; }
-        .mini-detail { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-        .mini-roas { color: var(--accent); }
+        /* MINI CARDS */
+        .mini-cards {
+          display: grid;
+          grid-template-columns: repeat(6, 1fr);
+          gap: 10px;
+        }
+        .mini-card {
+          background: rgba(13, 77, 110, 0.18);
+          border: 1px solid rgba(62, 229, 224, 0.1);
+          border-radius: 10px;
+          padding: 12px 14px;
+        }
+        .mini-label {
+          font-size: 10px;
+          color: var(--text-muted);
+          letter-spacing: 0.6px;
+          font-weight: 500;
+          margin-bottom: 4px;
+        }
+        .mini-value {
+          font-size: 20px;
+          font-weight: 500;
+          color: var(--text-primary);
+          font-variant-numeric: tabular-nums;
+          line-height: 1;
+        }
+        .mini-fraction {
+          font-size: 13px;
+          color: var(--text-muted);
+          font-weight: 400;
+        }
+        .mini-detail {
+          font-size: 11px;
+          color: var(--text-muted);
+          margin-top: 3px;
+        }
+        .mini-roas { color: #3ee5e0; }
         .mini-disabled { opacity: 0.4; }
 
         @media (max-width: 1300px) {
-          .breakdown { grid-template-columns: 1fr; }
+          .breakdown-row { grid-template-columns: 1fr; }
           .mini-cards { grid-template-columns: repeat(3, 1fr); }
         }
         @media (max-width: 768px) {
@@ -524,14 +661,12 @@ export default function RentabilidadView({
           .btn-action { justify-content: center; }
           .period-tabs { display: grid; grid-template-columns: repeat(3, 1fr); }
           .period-tab { justify-content: center; padding: 9px 6px; font-size: 12px; }
-          .hero { padding: 24px 18px 18px; }
-          .hero-content { flex-direction: column; padding-bottom: 20px; }
-          .hero-left { gap: 12px; min-width: 0; }
-          .hero-emoji { font-size: 40px; }
-          .hero-amount { font-size: 38px; }
+          .hero-trd { padding: 24px 20px; }
+          .hero-row { flex-direction: column; }
+          .hero-amount { font-size: 44px; }
           .hero-right { text-align: left; width: 100%; }
-          .hero-margen-value { font-size: 32px; }
-          .breakdown-section { padding: 14px 16px; }
+          .hero-margen { font-size: 30px; }
+          .bk-card { padding: 16px 18px; }
           .bk-row { grid-template-columns: 1fr auto; }
           .bk-detail { display: none; }
           .mini-cards { grid-template-columns: repeat(2, 1fr); }
