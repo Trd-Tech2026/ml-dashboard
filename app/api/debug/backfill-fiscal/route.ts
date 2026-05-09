@@ -25,12 +25,6 @@ async function fetchShippingData(shippingId: number, token: string) {
     const receiverDiscounts = data?.receiver?.discounts ?? []
     const senderDiscounts = data?.senders?.[0]?.discounts ?? []
 
-    // Bonificaciones que SÍ van al vendedor:
-    // - receiver.discounts con type='loyal' (programa de fidelidad ML)
-    // - senders.discounts con type='mandatory' (descuento obligatorio)
-    // NO contar:
-    // - receiver.discounts con type='ratio' (descuento al comprador, no nuestro)
-
     const bonifLoyal = Array.isArray(receiverDiscounts)
       ? receiverDiscounts
           .filter((d: any) => d.type === 'loyal')
@@ -103,6 +97,7 @@ export async function GET(request: Request) {
   const desde = searchParams.get('from')
   const dryRun = searchParams.get('dry') === 'true'
   const limit = parseInt(searchParams.get('limit') ?? '500', 10)
+  const onlyPending = searchParams.get('only_pending') === 'true'
 
   if (!desde) {
     return NextResponse.json({
@@ -126,12 +121,20 @@ export async function GET(request: Request) {
   if (!tokenData) return NextResponse.json({ ok: false, error: 'No hay token de ML' }, { status: 401 })
   const token = tokenData.access_token
 
-  const { data: orders, error } = await supabase
+  // Query base
+  let q = supabase
     .from('orders')
     .select('order_id, total_amount, status, date_created')
     .gte('date_created', desde)
     .order('date_created', { ascending: false })
     .limit(limit)
+
+  // Filtro opcional: solo las pendientes (sin fiscal_v2)
+  if (onlyPending) {
+    q = q.or('fiscal_v2.is.null,fiscal_v2.eq.false')
+  }
+
+  const { data: orders, error } = await q
 
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
   if (!orders || orders.length === 0) {
@@ -219,6 +222,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     dry_run: dryRun,
+    only_pending: onlyPending,
     procesadas,
     exitos,
     fallidas,
