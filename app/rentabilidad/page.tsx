@@ -10,16 +10,13 @@ type Props = {
 }
 
 // =============================================================================
-// HELPERS DE FECHA EN ZONA AR
+// HELPERS DE FECHA
 // =============================================================================
 
 function inicioDiaArgentina(offsetDias: number = 0): Date {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(ahora)
   const [year, month, day] = fechaAR.split('-').map(Number)
   const d = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00-03:00`)
@@ -30,10 +27,7 @@ function inicioDiaArgentina(offsetDias: number = 0): Date {
 function inicioSemanaArgentina(offsetSemanas: number = 0): Date {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(ahora)
   const [year, month, day] = fechaAR.split('-').map(Number)
   const dateAR = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T12:00:00-03:00`)
@@ -50,10 +44,7 @@ function inicioSemanaArgentina(offsetSemanas: number = 0): Date {
 function inicioMesArgentina(offsetMeses: number = 0): Date {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(ahora)
   const [yearStr, monthStr] = fechaAR.split('-')
   let year = parseInt(yearStr, 10)
@@ -65,7 +56,7 @@ function inicioMesArgentina(offsetMeses: number = 0): Date {
 }
 
 // =============================================================================
-// CÁLCULOS
+// TIPOS
 // =============================================================================
 
 type OrderRow = {
@@ -77,6 +68,11 @@ type OrderRow = {
   shipping_logistic_type: string | null
   date_created: string
   status: string
+  cargos_total: number | null
+  imp_total: number | null
+  imp_iibb_total: number | null
+  bonificacion_envio: number | null
+  fiscal_v2: boolean | null
 }
 
 type OrderItemRow = {
@@ -89,18 +85,34 @@ type OrderItemRow = {
 type ItemCost = { cost: number; iva_rate: number }
 
 export type Calculo = {
-  facturacion: number
-  comision: number
-  envios: number
-  flexBonif: number
-  iibb: number
-  costoMerca: number
+  // Totales
+  facturacion: number          // CON IVA (lo que cobró ML)
+  ingresosNetos: number        // SIN IVA (precioNeto sumado por item)
+
+  // Costos / cargos / impuestos
+  costoMerca: number           // SIN IVA (cost de BD ya viene sin IVA)
+  cargosML: number             // suma de cargos_total
+  retenciones: number          // suma de imp_total
+  bonificacionEnvio: number    // suma de bonificacion_envio
   publicidad: number
   gastosVarios: number
-  ganancia: number
-  margen: number
+
+  // IVA
+  ivaDebito: number            // 21% del precio (o iva_rate por item)
+  ivaCredito: number           // iva_rate × costo
+  ivaAPagar: number            // debito - credito
+
+  // Resultados
+  gananciaOperativa: number    // pre-IVA
+  ganancia: number             // POST-IVA (real)
+  margen: number               // ganancia / ingresosNetos × 100
+  margenOperativo: number      // gananciaOperativa / ingresosNetos × 100
+
+  // Métricas operativas
   ventas: number
   unidades: number
+  unidadesConCosto: number
+  unidadesSinCosto: number
   ticketPromedio: number
   envioCount: number
   flexCount: number
@@ -108,65 +120,107 @@ export type Calculo = {
   diasTotales: number
   mejorDiaMonto: number
   mejorDiaFecha: string | null
-  coberturaCosto: number
-  comisionPct: number
+  coberturaCosto: number       // % unidades con costo cargado
+  comisionPct: number          // cargos_total / facturacion × 100
   roas: number
+
+  // Compatibilidad con código viejo
+  comision: number             // = cargosML
+  envios: number               // = 0 (deprecado, ya en cargos)
+  flexBonif: number            // = bonificacionEnvio
+  iibb: number                 // = retenciones (incluye créd/déb + IIBB)
 }
 
 function diaArgentinaFromISO(iso: string): string {
   const d = new Date(iso)
   return new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(d)
 }
+
+// =============================================================================
+// CÁLCULO PRINCIPAL
+// =============================================================================
 
 function calcularRentabilidad(
   orders: OrderRow[],
   orderItems: OrderItemRow[],
   costsMap: Map<string, ItemCost>,
-  iibbPct: number,
   publicidadAmount: number,
   gastosVariosAmount: number,
   desde: Date,
   hasta: Date
 ): Calculo {
   const paid = orders.filter(o => o.status === 'paid')
-
-  const facturacion = paid.reduce((s, o) => s + Number(o.total_amount ?? 0), 0)
-  const comision = paid.reduce((s, o) => s + Number(o.marketplace_fee ?? 0), 0)
-  const envios = paid.reduce((s, o) => s + Number(o.shipping_cost ?? 0), 0)
-  const flexBonif = paid.reduce((s, o) => s + Number(o.discounts ?? 0), 0)
-  const iibb = facturacion * (iibbPct / 100)
-
   const paidIds = new Set(paid.map(o => String(o.order_id)))
-  let costoMerca = 0
-  let totalItemsVendidos = 0
-  let itemsConCosto = 0
+
+  // ---- Totales por orden ----
+  const facturacion = paid.reduce((s, o) => s + Number(o.total_amount ?? 0), 0)
+  const cargosML = paid.reduce((s, o) => s + Number(o.cargos_total ?? o.marketplace_fee ?? 0), 0)
+  const retenciones = paid.reduce((s, o) => s + Number(o.imp_total ?? 0), 0)
+  const bonificacionEnvio = paid.reduce((s, o) => s + Number(o.bonificacion_envio ?? o.discounts ?? 0), 0)
+
+  // ---- Cálculo IVA por item ----
+  let ingresosNetos = 0    // precio sin IVA
+  let ivaDebito = 0
+  let costoMerca = 0       // costo SIN IVA (ya está sin IVA en BD)
+  let ivaCredito = 0
+
+  let unidades = 0
+  let unidadesConCosto = 0
+  let unidadesSinCosto = 0
+
   for (const oi of orderItems) {
     if (!paidIds.has(String(oi.order_id))) continue
-    totalItemsVendidos++
+    const qty = oi.quantity ?? 0
+    const unitPrice = Number(oi.unit_price ?? 0)
+    unidades += qty
+
     const ci = costsMap.get(oi.item_id)
-    if (!ci || !ci.cost) continue
-    itemsConCosto++
-    const ivaRate = ci.iva_rate ?? 21
-    const costoConIva = ci.cost * (1 + ivaRate / 100)
-    costoMerca += costoConIva * (oi.quantity ?? 0)
+    const ivaRate = ci?.iva_rate ?? 21
+    const ivaFactor = 1 + ivaRate / 100
+
+    // INGRESOS y IVA DÉBITO (siempre se calculan)
+    const subtotalConIva = unitPrice * qty
+    const subtotalSinIva = subtotalConIva / ivaFactor
+    ingresosNetos += subtotalSinIva
+    ivaDebito += (subtotalConIva - subtotalSinIva)
+
+    // COSTO y IVA CRÉDITO (solo si hay cost cargado)
+    if (ci && ci.cost > 0) {
+      unidadesConCosto += qty
+      const costoTotalSinIva = ci.cost * qty
+      costoMerca += costoTotalSinIva
+      ivaCredito += costoTotalSinIva * (ivaRate / 100)
+    } else {
+      unidadesSinCosto += qty
+    }
   }
 
-  const ganancia = facturacion - comision - envios + flexBonif - iibb - costoMerca - publicidadAmount - gastosVariosAmount
-  const margen = facturacion > 0 ? (ganancia / facturacion) * 100 : 0
+  const ivaAPagar = ivaDebito - ivaCredito
 
+  // ---- Ganancia ----
+  const gananciaOperativa =
+    ingresosNetos
+    - costoMerca
+    - cargosML
+    - retenciones
+    + bonificacionEnvio
+    - publicidadAmount
+    - gastosVariosAmount
+
+  const ganancia = gananciaOperativa - ivaAPagar
+
+  const margenOperativo = ingresosNetos > 0 ? (gananciaOperativa / ingresosNetos) * 100 : 0
+  const margen = ingresosNetos > 0 ? (ganancia / ingresosNetos) * 100 : 0
+
+  // ---- Métricas operativas ----
   const ventas = paid.length
-  let unidades = 0
-  for (const oi of orderItems) {
-    if (paidIds.has(String(oi.order_id))) unidades += (oi.quantity ?? 0)
-  }
   const ticketPromedio = ventas > 0 ? facturacion / ventas : 0
 
-  const envioCount = paid.filter(o => Number(o.shipping_cost ?? 0) > 0).length
+  const envioCount = paid.filter(o =>
+    o.shipping_logistic_type !== null && o.shipping_logistic_type !== 'none'
+  ).length
   const flexCount = paid.filter(o => o.shipping_logistic_type === 'self_service').length
 
   const diasConVenta = new Set<string>()
@@ -185,21 +239,32 @@ function calcularRentabilidad(
     if (monto > mejorDiaMonto) { mejorDiaMonto = monto; mejorDiaFecha = dia }
   }
 
-  const coberturaCosto = totalItemsVendidos > 0 ? (itemsConCosto / totalItemsVendidos) * 100 : 0
-  const comisionPct = facturacion > 0 ? (comision / facturacion) * 100 : 0
+  const coberturaCosto = unidades > 0 ? (unidadesConCosto / unidades) * 100 : 0
+  const comisionPct = facturacion > 0 ? (cargosML / facturacion) * 100 : 0
   const roas = publicidadAmount > 0 ? facturacion / publicidadAmount : 0
 
   return {
-    facturacion, comision, envios, flexBonif, iibb, costoMerca,
+    facturacion, ingresosNetos,
+    costoMerca, cargosML, retenciones, bonificacionEnvio,
     publicidad: publicidadAmount, gastosVarios: gastosVariosAmount,
-    ganancia, margen,
-    ventas, unidades, ticketPromedio,
+    ivaDebito, ivaCredito, ivaAPagar,
+    gananciaOperativa, ganancia, margen, margenOperativo,
+    ventas, unidades, unidadesConCosto, unidadesSinCosto, ticketPromedio,
     envioCount, flexCount,
     diasActivos, diasTotales,
     mejorDiaMonto, mejorDiaFecha,
     coberturaCosto, comisionPct, roas,
+    // Compat
+    comision: cargosML,
+    envios: 0,
+    flexBonif: bonificacionEnvio,
+    iibb: retenciones,
   }
 }
+
+// =============================================================================
+// FETCHERS
+// =============================================================================
 
 async function fetchPeriodData(supabase: any, desdeISO: string, hastaISO: string) {
   const orders: OrderRow[] = []
@@ -208,7 +273,7 @@ async function fetchPeriodData(supabase: any, desdeISO: string, hastaISO: string
   while (true) {
     const { data, error } = await supabase
       .from('orders')
-      .select('order_id, total_amount, marketplace_fee, shipping_cost, discounts, shipping_logistic_type, date_created, status')
+      .select('order_id, total_amount, marketplace_fee, shipping_cost, discounts, shipping_logistic_type, date_created, status, cargos_total, imp_total, imp_iibb_total, bonificacion_envio, fiscal_v2')
       .gte('date_created', desdeISO)
       .lt('date_created', hastaISO)
       .range(from, from + PAGE - 1)
@@ -256,13 +321,11 @@ async function fetchPeriodData(supabase: any, desdeISO: string, hastaISO: string
 async function fetchAdsTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
   const desdeStr = diaArgentinaFromISO(desde.toISOString())
   const hastaStr = diaArgentinaFromISO(hasta.toISOString())
-
   const { data } = await supabase
     .from('ad_expenses')
     .select('amount')
     .gte('date', desdeStr)
     .lte('date', hastaStr)
-
   if (!data) return 0
   return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
 }
@@ -270,19 +333,17 @@ async function fetchAdsTotal(supabase: any, desde: Date, hasta: Date): Promise<n
 async function fetchQuickExpensesTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
   const desdeStr = diaArgentinaFromISO(desde.toISOString())
   const hastaStr = diaArgentinaFromISO(hasta.toISOString())
-
   const { data } = await supabase
     .from('quick_expenses')
     .select('amount')
     .gte('date', desdeStr)
     .lte('date', hastaStr)
-
   if (!data) return 0
   return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
 }
 
 // =============================================================================
-// PÁGINA SERVER COMPONENT
+// PÁGINA
 // =============================================================================
 
 export default async function RentabilidadPage({ searchParams }: Props) {
@@ -329,16 +390,6 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     labelComparacion = 'vs ayer'
   }
 
-  const { data: taxRow } = await supabase
-    .from('tax_config')
-    .select('percentage')
-    .eq('type', 'iibb')
-    .eq('active', true)
-    .order('id', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const iibbPct = taxRow?.percentage != null ? Number(taxRow.percentage) : 5.0
-
   const [actual, previo, publicidadActual, publicidadPrev, gastosActual, gastosPrev] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
@@ -349,11 +400,11 @@ export default async function RentabilidadPage({ searchParams }: Props) {
   ])
 
   const calcActual = calcularRentabilidad(
-    actual.orders, actual.orderItems, actual.costsMap, iibbPct, publicidadActual, gastosActual,
+    actual.orders, actual.orderItems, actual.costsMap, publicidadActual, gastosActual,
     desdeActual, hastaActual
   )
   const calcPrev = calcularRentabilidad(
-    previo.orders, previo.orderItems, previo.costsMap, iibbPct, publicidadPrev, gastosPrev,
+    previo.orders, previo.orderItems, previo.costsMap, publicidadPrev, gastosPrev,
     desdePrev, hastaPrev
   )
 
@@ -364,7 +415,6 @@ export default async function RentabilidadPage({ searchParams }: Props) {
       labelComparacion={labelComparacion}
       calcActual={calcActual}
       calcPrev={calcPrev}
-      iibbPct={iibbPct}
     />
   )
 }

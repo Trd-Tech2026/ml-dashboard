@@ -18,7 +18,6 @@ type Props = {
   labelComparacion: string
   calcActual: Calculo
   calcPrev: Calculo
-  iibbPct: number
 }
 
 const TZ = 'America/Argentina/Buenos_Aires'
@@ -34,7 +33,7 @@ function calcCambio(actual: number, previo: number): Cambio {
 }
 
 export default function RentabilidadView({
-  period, labelPeriodo, labelComparacion, calcActual, calcPrev, iibbPct,
+  period, labelPeriodo, labelComparacion, calcActual, calcPrev,
 }: Props) {
   const router = useRouter()
   const [adsModalOpen, setAdsModalOpen] = useState(false)
@@ -72,7 +71,7 @@ export default function RentabilidadView({
   }
 
   const margenLabel = (() => {
-    if (calcActual.facturacion === 0) return ''
+    if (calcActual.ingresosNetos === 0) return ''
     if (calcActual.margen >= 30) return 'IMPARABLE'
     if (calcActual.margen >= 20) return 'EXCELENTE'
     if (calcActual.margen >= 10) return 'BUENO'
@@ -109,7 +108,7 @@ export default function RentabilidadView({
       <div className="header">
         <div className="header-title">
           <h1>💰 Rentabilidad</h1>
-          <p className="subtitle">Métricas combinadas · datos en tiempo real</p>
+          <p className="subtitle">Cálculo fiscal completo · Responsable Inscripto</p>
         </div>
         <div className="header-actions">
           <button className="btn-action btn-action-sync" onClick={handleSync} disabled={syncing}>
@@ -122,7 +121,7 @@ export default function RentabilidadView({
           <button className="btn-action btn-action-warning" onClick={() => setGastoModalOpen(true)}>
             <span>💸</span> Gasto
           </button>
-          <button className="btn-action" onClick={() => setCalcOpen(true)} title="Atajo: Esc cierra">
+          <button className="btn-action" onClick={() => setCalcOpen(true)}>
             <span>🧮</span> Calc
           </button>
           <button className="btn-action" onClick={() => setConfigModalOpen(true)}>
@@ -164,6 +163,18 @@ export default function RentabilidadView({
             })}
           </div>
 
+          {calcActual.unidadesSinCosto > 0 && (
+            <div className="warn-banner">
+              <span>⚠️</span>
+              <div className="warn-text">
+                <strong>{calcActual.unidadesSinCosto}</strong> {calcActual.unidadesSinCosto === 1 ? 'unidad vendida' : 'unidades vendidas'} sin costo configurado.
+                Se asume IVA 21% para esos items, pero el cálculo de IVA crédito y costo merca queda en cero.
+                {' '}
+                <Link href="/stock/cargador-masivo" className="warn-link">Cargá los costos faltantes</Link>
+              </div>
+            </div>
+          )}
+
           <div className={`hero ${calcActual.ganancia >= 0 ? 'hero-positive' : 'hero-negative'}`}>
             <div className="hero-bg">
               <div className="hero-orb orb-1" />
@@ -175,83 +186,105 @@ export default function RentabilidadView({
                 <div className="hero-emoji">{calcActual.ganancia >= 0 ? '🚀' : '⚠️'}</div>
                 <div>
                   <div className="hero-label">
-                    GANANCIA · {labelPeriodo.toUpperCase()}
+                    GANANCIA NETA · {labelPeriodo.toUpperCase()}
                     {period === 'hoy' && <span className="badge-live">EN VIVO</span>}
                   </div>
                   <div className="hero-amount">{formatARSSigned(calcActual.ganancia)}</div>
-                  <div className="hero-subamount">{formatARSFull(calcActual.ganancia)}</div>
-                  <div className="hero-cambio">
-                    {renderCambio(cambioGanancia, labelComparacion)}
-                  </div>
+                  <div className="hero-subamount">después de IVA, comisiones, retenciones e impuestos</div>
+                  <div className="hero-cambio">{renderCambio(cambioGanancia, labelComparacion)}</div>
                 </div>
               </div>
               <div className="hero-right">
-                <div className="hero-margen-label">MARGEN</div>
-                <div className="hero-margen-value">{calcActual.facturacion > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}</div>
+                <div className="hero-margen-label">MARGEN REAL</div>
+                <div className="hero-margen-value">{calcActual.ingresosNetos > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}</div>
                 <div className="hero-margen-tag">{margenLabel}</div>
-                <div className="hero-cambio">
-                  {renderCambio(cambioMargen, labelComparacion)}
-                </div>
+                <div className="hero-cambio">{renderCambio(cambioMargen, labelComparacion)}</div>
               </div>
             </div>
 
-            <div className="stats-grid">
-              <div className="stat-cell">
-                <div className="stat-label">FACTURACIÓN</div>
-                <div className="stat-value stat-positive">{formatARS(calcActual.facturacion)}</div>
-                <div className="stat-detail">{calcActual.ventas} {calcActual.ventas === 1 ? 'venta' : 'ventas'}</div>
-              </div>
-              <div className="stat-cell">
-                <div className="stat-label">− COMISIÓN ML</div>
-                <div className="stat-value stat-negative">−{formatARS(calcActual.comision)}</div>
-                <div className="stat-detail">{calcActual.comisionPct.toFixed(1)}% efectivo</div>
-              </div>
-              <div className="stat-cell">
-                <div className="stat-label">− ENVÍOS ME</div>
-                <div className="stat-value stat-negative">−{formatARS(calcActual.envios)}</div>
-                <div className="stat-detail">{calcActual.envioCount} {calcActual.envioCount === 1 ? 'envío' : 'envíos'}</div>
-              </div>
-              <div className="stat-cell">
-                <div className="stat-label">+ FLEX (BONIF.)</div>
-                <div className="stat-value stat-positive">+{formatARS(calcActual.flexBonif)}</div>
-                <div className="stat-detail">{calcActual.flexCount} ventas Flex</div>
-              </div>
-              <div className="stat-cell">
-                <div className="stat-label">− PUBLICIDAD</div>
-                <div className="stat-value stat-negative">−{formatARS(calcActual.publicidad)}</div>
-                <div className="stat-detail">
-                  {calcActual.publicidad === 0
-                    ? <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 cargar gastos</button>
-                    : <button className="link-btn" onClick={() => setAdsModalOpen(true)}>📊 ver/editar</button>
-                  }
+            <div className="breakdown">
+              <div className="breakdown-section">
+                <div className="breakdown-section-title">📊 Operativo (sin IVA)</div>
+                <div className="breakdown-grid">
+                  <div className="bk-row bk-row-positive">
+                    <span className="bk-label">+ INGRESOS NETOS</span>
+                    <span className="bk-value bk-value-positive">{formatARS(calcActual.ingresosNetos)}</span>
+                    <span className="bk-detail">{calcActual.ventas} {calcActual.ventas === 1 ? 'venta' : 'ventas'} · sin IVA</span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-label">− COSTO MERCA</span>
+                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.costoMerca)}</span>
+                    <span className="bk-detail">
+                      {calcActual.coberturaCosto < 100 ? (
+                        <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
+                          cobertura {calcActual.coberturaCosto.toFixed(0)}%
+                        </button>
+                      ) : 'cobertura 100%'}
+                    </span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-label">− CARGOS ML</span>
+                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.cargosML)}</span>
+                    <span className="bk-detail">{calcActual.comisionPct.toFixed(1)}% sobre venta</span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-label">− RETENCIONES ML</span>
+                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.retenciones)}</span>
+                    <span className="bk-detail">IIBB + créd/déb</span>
+                  </div>
+                  <div className="bk-row bk-row-positive">
+                    <span className="bk-label">+ BONIFICACIÓN ENVÍO</span>
+                    <span className="bk-value bk-value-positive">+{formatARS(calcActual.bonificacionEnvio)}</span>
+                    <span className="bk-detail">{calcActual.flexCount} ventas Flex</span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-label">− PUBLICIDAD</span>
+                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.publicidad)}</span>
+                    <span className="bk-detail">
+                      <button className="link-btn" onClick={() => setAdsModalOpen(true)}>
+                        {calcActual.publicidad === 0 ? '📊 cargar' : '📊 ver/editar'}
+                      </button>
+                    </span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-label">− GASTOS VARIOS</span>
+                    <span className="bk-value bk-value-negative">−{formatARS(calcActual.gastosVarios)}</span>
+                    <span className="bk-detail">
+                      <button className="link-btn" onClick={() => setGastoModalOpen(true)}>
+                        {calcActual.gastosVarios === 0 ? '💸 cargar' : '💸 ver/editar'}
+                      </button>
+                    </span>
+                  </div>
+                  <div className="bk-row bk-row-subtotal">
+                    <span className="bk-label">= GANANCIA OPERATIVA</span>
+                    <span className={`bk-value ${calcActual.gananciaOperativa >= 0 ? 'bk-value-positive' : 'bk-value-negative'}`}>
+                      {formatARSSigned(calcActual.gananciaOperativa)}
+                    </span>
+                    <span className="bk-detail">margen {calcActual.margenOperativo.toFixed(1)}%</span>
+                  </div>
                 </div>
               </div>
-              <div className="stat-cell">
-                <div className="stat-label">− IIBB ({iibbPct.toFixed(1)}%)</div>
-                <div className="stat-value stat-negative">−{formatARS(calcActual.iibb)}</div>
-                <div className="stat-detail">
-                  <button className="link-btn" onClick={() => setConfigModalOpen(true)}>⚙️ editar %</button>
-                </div>
-              </div>
-              <div className="stat-cell">
-                <div className="stat-label">− COSTO MERCA</div>
-                <div className="stat-value stat-negative">−{formatARS(calcActual.costoMerca)}</div>
-                <div className="stat-detail">
-                  {calcActual.coberturaCosto < 100 ? (
-                    <button className="link-btn" onClick={() => setConfigModalOpen(true)}>
-                      cobertura {calcActual.coberturaCosto.toFixed(0)}%
-                    </button>
-                  ) : `cobertura 100%`}
-                </div>
-              </div>
-              <div className="stat-cell">
-                <div className="stat-label">− GASTOS VARIOS</div>
-                <div className="stat-value stat-negative">−{formatARS(calcActual.gastosVarios)}</div>
-                <div className="stat-detail">
-                  {calcActual.gastosVarios === 0
-                    ? <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 cargar gasto</button>
-                    : <button className="link-btn" onClick={() => setGastoModalOpen(true)}>💸 ver/editar</button>
-                  }
+
+              <div className="breakdown-section breakdown-iva">
+                <div className="breakdown-section-title">📋 IVA (Responsable Inscripto)</div>
+                <div className="breakdown-grid">
+                  <div className="bk-row">
+                    <span className="bk-label">IVA DÉBITO</span>
+                    <span className="bk-value">{formatARS(calcActual.ivaDebito)}</span>
+                    <span className="bk-detail">21% del precio (cobrado al cliente)</span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-label">− IVA CRÉDITO</span>
+                    <span className="bk-value bk-value-positive">−{formatARS(calcActual.ivaCredito)}</span>
+                    <span className="bk-detail">{calcActual.coberturaCosto.toFixed(0)}% costos cargados</span>
+                  </div>
+                  <div className="bk-row bk-row-subtotal">
+                    <span className="bk-label">{calcActual.ivaAPagar >= 0 ? '= IVA A PAGAR' : '= SALDO IVA A FAVOR'}</span>
+                    <span className={`bk-value ${calcActual.ivaAPagar > 0 ? 'bk-value-negative' : 'bk-value-positive'}`}>
+                      {formatARSSigned(calcActual.ivaAPagar)}
+                    </span>
+                    <span className="bk-detail">débito − crédito</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -273,7 +306,7 @@ export default function RentabilidadView({
             <div className="mini-card">
               <div className="mini-label">🎫 TICKET PROM.</div>
               <div className="mini-value">{formatARS(calcActual.ticketPromedio)}</div>
-              <div className="mini-detail">por venta</div>
+              <div className="mini-detail">por venta (con IVA)</div>
             </div>
             <div className="mini-card">
               <div className="mini-label">📅 DÍAS ACTIVOS</div>
@@ -305,7 +338,7 @@ export default function RentabilidadView({
           period={period}
           labelPeriodo={labelPeriodo}
           labelComparacion={labelComparacion}
-          iibbPct={iibbPct}
+          iibbPct={0}
         />
       )}
 
@@ -333,9 +366,7 @@ export default function RentabilidadView({
         .spinning { display: inline-block; animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
-        .main-tabs {
-          display: flex; gap: 4px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 24px;
-        }
+        .main-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 24px; }
         .main-tab {
           background: transparent; border: none; padding: 12px 18px; color: var(--text-muted);
           font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
@@ -344,7 +375,7 @@ export default function RentabilidadView({
         .main-tab:hover { color: var(--text-secondary); }
         .main-tab.main-tab-active { color: var(--accent); border-bottom-color: var(--accent); }
 
-        .period-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+        .period-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
         .period-tab {
           display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px;
           border-radius: 10px; font-size: 13px; font-weight: 600; background: var(--bg-card);
@@ -357,6 +388,17 @@ export default function RentabilidadView({
           color: #1a1a1a; border-color: #fbbf24;
           box-shadow: 0 4px 14px rgba(245, 158, 11, 0.25);
         }
+
+        .warn-banner {
+          display: flex; gap: 10px; align-items: flex-start;
+          background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3);
+          border-radius: 10px; padding: 12px 16px; margin-bottom: 16px;
+          font-size: 13px; line-height: 1.5; color: var(--text-secondary);
+        }
+        .warn-banner > span:first-child { font-size: 18px; flex-shrink: 0; }
+        .warn-text strong { color: var(--warning); }
+        .warn-link { color: var(--warning); font-weight: 600; }
+        .warn-link:hover { text-decoration: underline; }
 
         .hero {
           position: relative; background: var(--bg-card); border: 1px solid var(--border-subtle);
@@ -383,7 +425,7 @@ export default function RentabilidadView({
 
         .hero-content {
           position: relative; display: flex; justify-content: space-between; align-items: flex-start;
-          gap: 20px; margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid var(--border-subtle);
+          gap: 20px; margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--border-subtle);
           flex-wrap: wrap;
         }
         .hero-left { display: flex; gap: 18px; align-items: flex-start; flex: 1; min-width: 280px; }
@@ -411,7 +453,7 @@ export default function RentabilidadView({
           background: linear-gradient(135deg, #f87171 0%, #fb923c 100%);
           -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
         }
-        .hero-subamount { color: var(--text-muted); font-size: 13px; }
+        .hero-subamount { color: var(--text-muted); font-size: 12px; margin-bottom: 4px; }
         .hero-cambio { margin-top: 8px; font-size: 12px; }
         .hero-right { text-align: right; }
         .hero-margen-label { font-size: 11px; color: var(--text-muted); letter-spacing: 1.5px; font-weight: 700; }
@@ -423,15 +465,41 @@ export default function RentabilidadView({
         .cambio-bad { color: var(--danger); }
         .cambio-flat { color: var(--text-muted); }
 
-        .stats-grid { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px 24px; }
-        .stat-cell { display: flex; flex-direction: column; }
-        .stat-label { font-size: 10px; color: var(--text-muted); letter-spacing: 1px; font-weight: 600; margin-bottom: 4px; }
-        .stat-value { font-size: 22px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1.1; }
-        .stat-negative { color: var(--text-secondary); }
-        .stat-detail { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        .breakdown {
+          position: relative; display: grid; grid-template-columns: 1.6fr 1fr; gap: 24px;
+        }
+        .breakdown-section {
+          background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-subtle);
+          border-radius: 14px; padding: 16px 20px;
+        }
+        .breakdown-iva { background: rgba(168, 85, 247, 0.04); border-color: rgba(168, 85, 247, 0.2); }
+        .breakdown-section-title {
+          font-size: 11px; color: var(--text-muted); letter-spacing: 1px; font-weight: 700;
+          margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle);
+        }
+        .breakdown-grid { display: flex; flex-direction: column; gap: 8px; }
+        .bk-row {
+          display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: baseline;
+          padding: 4px 0; font-size: 12px;
+        }
+        .bk-label { color: var(--text-secondary); font-weight: 500; }
+        .bk-value {
+          font-weight: 700; font-variant-numeric: tabular-nums;
+          color: var(--text-primary); font-size: 14px; text-align: right; white-space: nowrap;
+        }
+        .bk-value-positive { color: var(--success); }
+        .bk-value-negative { color: var(--text-secondary); }
+        .bk-detail { color: var(--text-muted); font-size: 10px; text-align: right; }
+        .bk-row-subtotal {
+          margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+        }
+        .bk-row-subtotal .bk-label { font-weight: 700; color: var(--text-primary); font-size: 13px; }
+        .bk-row-subtotal .bk-value { font-size: 16px; }
+        .bk-row-positive .bk-value { font-weight: 700; }
+
         .link-btn {
           background: transparent; border: none; color: var(--accent); padding: 0;
-          font-family: inherit; font-size: 11px; cursor: pointer; text-decoration: underline;
+          font-family: inherit; font-size: 10px; cursor: pointer; text-decoration: underline;
         }
         .link-btn:hover { color: var(--accent-secondary); }
 
@@ -445,10 +513,8 @@ export default function RentabilidadView({
         .mini-disabled { opacity: 0.4; }
 
         @media (max-width: 1300px) {
+          .breakdown { grid-template-columns: 1fr; }
           .mini-cards { grid-template-columns: repeat(3, 1fr); }
-        }
-        @media (max-width: 1100px) {
-          .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         @media (max-width: 768px) {
           .page { padding: 16px; }
@@ -458,15 +524,16 @@ export default function RentabilidadView({
           .btn-action { justify-content: center; }
           .period-tabs { display: grid; grid-template-columns: repeat(3, 1fr); }
           .period-tab { justify-content: center; padding: 9px 6px; font-size: 12px; }
-          .hero { padding: 24px 20px 20px; }
+          .hero { padding: 24px 18px 18px; }
           .hero-content { flex-direction: column; padding-bottom: 20px; }
           .hero-left { gap: 12px; min-width: 0; }
           .hero-emoji { font-size: 40px; }
           .hero-amount { font-size: 38px; }
           .hero-right { text-align: left; width: 100%; }
           .hero-margen-value { font-size: 32px; }
-          .stats-grid { grid-template-columns: 1fr 1fr; gap: 14px 16px; }
-          .stat-value { font-size: 18px; }
+          .breakdown-section { padding: 14px 16px; }
+          .bk-row { grid-template-columns: 1fr auto; }
+          .bk-detail { display: none; }
           .mini-cards { grid-template-columns: repeat(2, 1fr); }
           .mini-value { font-size: 18px; }
         }
