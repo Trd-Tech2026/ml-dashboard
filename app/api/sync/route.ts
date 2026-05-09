@@ -59,12 +59,29 @@ async function fetchShippingData(shippingId: string | number, token: string) {
     })
     if (res.status !== 200) return { bonificacionReceiver: 0 }
     const data = await res.json()
-    // Bonificación que ML aplica a la operación (lo que nos importa)
-    const discounts = data?.receiver?.discounts ?? []
-    const bonificacionReceiver = Array.isArray(discounts)
-      ? discounts.reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
+
+    const receiverDiscounts = data?.receiver?.discounts ?? []
+    const senderDiscounts = data?.senders?.[0]?.discounts ?? []
+
+    // Bonificaciones que SÍ van al vendedor:
+    // - receiver.discounts con type='loyal' (programa de fidelidad ML, ML te paga la bonif)
+    // - senders.discounts con type='mandatory' (descuento obligatorio que ML le hace al vendedor)
+    // NO contar:
+    // - receiver.discounts con type='ratio' (descuento que ML le da al comprador, no a vos)
+
+    const bonifLoyal = Array.isArray(receiverDiscounts)
+      ? receiverDiscounts
+          .filter((d: any) => d.type === 'loyal')
+          .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
-    return { bonificacionReceiver }
+
+    const bonifMandatory = Array.isArray(senderDiscounts)
+      ? senderDiscounts
+          .filter((d: any) => d.type === 'mandatory')
+          .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
+      : 0
+
+    return { bonificacionReceiver: bonifLoyal + bonifMandatory }
   } catch {
     return { bonificacionReceiver: 0 }
   }
@@ -93,7 +110,7 @@ type FiscalBreakdown = {
   cargos_otros: number
   cargos_total: number
   imp_creditos_debitos: number
-  imp_creditos_debitos_envio: number  // calculado, no viene de API
+  imp_creditos_debitos_envio: number
   imp_iibb_total: number
   imp_iibb_jurisdicciones: Record<string, number>
   imp_otros: number
@@ -126,7 +143,6 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
       const type = c.type
 
       if (type === 'fee') {
-        // Cargos puros de ML
         if (name.includes('meli_percentage_fee')) {
           result.cargos_comision += neto
         } else if (name.includes('flat_fee') || name.includes('fixed_fee')) {
@@ -137,11 +153,9 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
           result.cargos_otros += neto
         }
       } else if (type === 'tax') {
-        // Impuestos retenidos
         if (name.includes('debitos_creditos')) {
           result.imp_creditos_debitos += neto
         } else if (name.includes('iibb') || name.includes('sirtac')) {
-          // Identificar jurisdicción del nombre (ej: tax_withholding_sirtac-caba → caba)
           const jurisdiccion = extraerJurisdiccion(c.name)
           result.imp_iibb_total += neto
           result.imp_iibb_jurisdicciones[jurisdiccion] =
@@ -150,7 +164,6 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
           result.imp_otros += neto
         }
       }
-      // Otros tipos no contemplados se ignoran
     }
   }
 
@@ -160,7 +173,7 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
     result.cargos_financiacion +
     result.cargos_otros
 
-  // Impuesto fantasma: 0.6% de la bonificación de envío (ML lo aplica pero no expone)
+  // Impuesto fantasma: 0.6% de la bonificación de envío
   if (bonificacionEnvio > 0) {
     result.imp_creditos_debitos_envio = Math.round(bonificacionEnvio * 0.006 * 100) / 100
   }
@@ -177,7 +190,6 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
 function extraerJurisdiccion(name: string | null | undefined): string {
   if (!name) return 'desconocida'
   const lower = name.toLowerCase()
-  // Casos: tax_withholding_sirtac-caba, tax_withholding_sirtac-buenos_aires, tax_withholding_collector-iibb_tucuman
   if (lower.includes('iibb_tucuman')) return 'tucuman'
   if (lower.includes('sirtac-')) {
     const parts = lower.split('sirtac-')
@@ -288,7 +300,6 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // Procesar cada orden
     const ordersConFinanzas = await Promise.all(results.map(async (order: any) => {
       const total = Number(order.total_amount ?? 0)
 
@@ -309,18 +320,12 @@ export async function GET() {
         shippingLogisticType = info.logistic_type
       }
 
-      // Análisis fiscal completo
       const fiscal = analizarFiscal(validMp, bonificacion)
 
-      // Net received real: precio - cargos - impuestos + bonificación
-      // (No restamos shipping_cost porque shipment_costs.senders.cost es informativo,
-      // la bonificación ya neta lo que pagamos efectivamente)
       const net_received = validMp.length > 0
         ? total - fiscal.cargos_total - fiscal.imp_total + bonificacion
         : 0
 
-      // Para retrocompat, marketplace_fee = solo cargos (sin impuestos)
-      // shipping_cost = 0 (deprecado, lo dejamos en 0 para no romper código)
       return {
         order,
         marketplace_fee: fiscal.cargos_total,
@@ -348,7 +353,6 @@ export async function GET() {
       discounts,
       net_received,
       shipping_logistic_type,
-      // Campos fiscales nuevos
       cargos_comision: fiscal.cargos_comision,
       cargos_costo_fijo: fiscal.cargos_costo_fijo,
       cargos_financiacion: fiscal.cargos_financiacion,

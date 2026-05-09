@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-export const maxDuration = 300 // 5 minutos
+export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 async function fetchMPPayment(paymentId: number, token: string): Promise<any | null> {
@@ -21,10 +21,29 @@ async function fetchShippingData(shippingId: number, token: string) {
     })
     if (res.status !== 200) return 0
     const data = await res.json()
-    const discounts = data?.receiver?.discounts ?? []
-    return Array.isArray(discounts)
-      ? discounts.reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
+
+    const receiverDiscounts = data?.receiver?.discounts ?? []
+    const senderDiscounts = data?.senders?.[0]?.discounts ?? []
+
+    // Bonificaciones que SÍ van al vendedor:
+    // - receiver.discounts con type='loyal' (programa de fidelidad ML)
+    // - senders.discounts con type='mandatory' (descuento obligatorio)
+    // NO contar:
+    // - receiver.discounts con type='ratio' (descuento al comprador, no nuestro)
+
+    const bonifLoyal = Array.isArray(receiverDiscounts)
+      ? receiverDiscounts
+          .filter((d: any) => d.type === 'loyal')
+          .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
+
+    const bonifMandatory = Array.isArray(senderDiscounts)
+      ? senderDiscounts
+          .filter((d: any) => d.type === 'mandatory')
+          .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
+      : 0
+
+    return bonifLoyal + bonifMandatory
   } catch { return 0 }
 }
 
@@ -81,7 +100,7 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number) {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const desde = searchParams.get('from') // formato: 2026-04-01
+  const desde = searchParams.get('from')
   const dryRun = searchParams.get('dry') === 'true'
   const limit = parseInt(searchParams.get('limit') ?? '500', 10)
 
@@ -107,7 +126,6 @@ export async function GET(request: Request) {
   if (!tokenData) return NextResponse.json({ ok: false, error: 'No hay token de ML' }, { status: 401 })
   const token = tokenData.access_token
 
-  // Traer órdenes de la BD desde la fecha indicada
   const { data: orders, error } = await supabase
     .from('orders')
     .select('order_id, total_amount, status, date_created')
@@ -117,7 +135,7 @@ export async function GET(request: Request) {
 
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
   if (!orders || orders.length === 0) {
-    return NextResponse.json({ ok: true, message: 'No hay órdenes para procesar', count: 0 })
+    return NextResponse.json({ ok: true, message: 'No hay ordenes para procesar', count: 0 })
   }
 
   let procesadas = 0
@@ -129,7 +147,6 @@ export async function GET(request: Request) {
   for (const o of orders) {
     procesadas++
     try {
-      // GET /orders/{id}
       const orderRes = await fetch(`https://api.mercadolibre.com/orders/${o.order_id}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
@@ -141,14 +158,12 @@ export async function GET(request: Request) {
       const order = await orderRes.json()
       const total = Number(order.total_amount ?? 0)
 
-      // Payments
       const paymentIds = (order.payments ?? []).map((p: any) => p.id).filter(Boolean)
       const mpPayments = await Promise.all(
         paymentIds.map((id: any) => fetchMPPayment(id, token))
       )
       const validMp = mpPayments.filter(Boolean)
 
-      // Bonificación
       let bonif = 0
       if (order.shipping?.id) {
         bonif = await fetchShippingData(order.shipping.id, token)
@@ -180,7 +195,7 @@ export async function GET(request: Request) {
       }
 
       if (muestra.length < 5) {
-        muestra.push({ order_id: o.order_id, total, net_received, fiscal })
+        muestra.push({ order_id: o.order_id, total, net_received, bonif, fiscal })
       }
 
       if (!dryRun) {
