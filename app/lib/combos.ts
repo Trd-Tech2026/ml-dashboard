@@ -7,13 +7,13 @@ export type ItemCostInfo = {
 }
 
 export type ManualComponent = {
-  child_sku: string
+  component_sku: string
   quantity: number
 }
 
 export type ResolvedComponent = {
   fragment: string
-  child_sku: string
+  component_sku: string
   quantity: number
   cost: number
   iva_rate: number
@@ -34,20 +34,20 @@ export function resolverCombo(
   if (!sellerSku) return { isCombo: false }
   const alerts: string[] = []
 
-  // PASO 1: Mapping manual
+  // PASO 1: Mapping manual desde product_components
   const manuales = manualComponentsByParent.get(sellerSku)
   if (manuales && manuales.length > 0) {
     const components: ResolvedComponent[] = []
     const missing: string[] = []
     for (const m of manuales) {
-      const ci = costsBySku.get(m.child_sku)
+      const ci = costsBySku.get(m.component_sku)
       if (!ci || !ci.cost) {
-        missing.push(m.child_sku)
+        missing.push(m.component_sku)
         continue
       }
       components.push({
-        fragment: m.child_sku,
-        child_sku: m.child_sku,
+        fragment: m.component_sku,
+        component_sku: m.component_sku,
         quantity: m.quantity,
         cost: ci.cost,
         iva_rate: ci.iva_rate,
@@ -60,7 +60,7 @@ export function resolverCombo(
     return { isCombo: true, source: 'manual', components, alerts }
   }
 
-  // PASO 2: ¿Es CBO-? Auto-detectar
+  // PASO 2: Auto-detectar si empieza con CBO-
   if (!sellerSku.startsWith('CBO-')) {
     return { isCombo: false }
   }
@@ -87,18 +87,18 @@ export function resolverCombo(
     }
     components.push({
       fragment: frag,
-      child_sku: elegido.seller_sku ?? frag,
+      component_sku: elegido.seller_sku ?? frag,
       quantity: 1,
       cost: elegido.cost,
       iva_rate: elegido.iva_rate,
     })
     if (conCosto.length > 1) {
-      alerts.push(`Fragmento "${frag}" tiene varios matches, se eligió ${elegido.seller_sku}`)
+      alerts.push(`"${frag}" tiene varios matches, se eligió ${elegido.seller_sku}`)
     }
   }
 
   if (missing.length > 0) {
-    alerts.push(`Fragmentos sin componente cargado: ${missing.join(', ')}`)
+    alerts.push(`Fragmentos sin componente: ${missing.join(', ')}`)
     return { isCombo: true, source: 'partial', resolved: components, missing, alerts }
   }
 
@@ -127,14 +127,6 @@ export type ItemCostResolution = {
   isPartial: boolean
 }
 
-/**
- * Calcula el costo de un item de orden, manejando combos correctamente.
- * Prioridad:
- * 1. Combo con mapping manual o auto-detectable -> suma componentes
- * 2. Combo cuyos componentes no se pudieron resolver -> usa cost manual del item
- * 3. Producto individual -> usa cost manual del item
- * 4. Sin cost manual -> no-data
- */
 export function calcularCostoItem(
   itemSellerSku: string | null,
   itemQuantity: number,
@@ -161,23 +153,22 @@ export function calcularCostoItem(
         isPartial: false,
       }
     }
-    // Si combo.source es 'partial' o 'fallback', usar cost manual del item como fallback
+    // partial o fallback: caer al cost manual del item
     if (itemCostInfo && itemCostInfo.cost > 0) {
       const costoSinIva = itemCostInfo.cost * itemQuantity
-      const alertList = [...(combo as any).alerts ?? []]
-      alertList.push('Usando cost manual del combo (no se pudo resolver por componentes)')
+      const baseAlerts = (combo as any).alerts ?? []
       return {
         costoSinIva,
         ivaCredito: costoSinIva * (itemCostInfo.iva_rate / 100),
         source: 'combo-fallback',
-        alerts: alertList,
+        alerts: [...baseAlerts, 'Usando cost manual del combo'],
         isPartial: false,
       }
     }
     return {
       costoSinIva: 0, ivaCredito: 0,
       source: 'no-data',
-      alerts: (combo as any).alerts ?? ['Combo sin cost manual ni componentes resolubles'],
+      alerts: (combo as any).alerts ?? ['Combo sin costo ni componentes'],
       isPartial: true,
     }
   }

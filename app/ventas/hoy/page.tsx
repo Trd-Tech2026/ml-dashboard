@@ -2,13 +2,18 @@ import { createClient } from '@supabase/supabase-js'
 import BotonSync from '../../components/BotonSync'
 import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
 import CollapsibleSection from '../../components/CollapsibleSection'
+import {
+  buildIndividualesByLastSegment,
+  calcularCostoItem,
+  type ItemCostInfo,
+  type ManualComponent,
+} from '../../lib/combos'
 
 export const dynamic = 'force-dynamic'
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
 type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
-
 type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
 
 function inicioDiaArgentinaISO(): string {
@@ -29,39 +34,49 @@ function calcCambio(actual: number, previo: number): Cambio {
   return { pct, trend: pct > 0 ? 'up' : 'down' }
 }
 
-type ItemCostInfo = { cost: number; iva_rate: number }
-
 function calcularFiscalOrden(
   o: any,
   items: any[],
-  costsMap: Map<string, ItemCostInfo>
+  itemIdToSeller: Map<string, string | null>,
+  itemsBySku: Map<string, any>,
+  costsBySku: Map<string, ItemCostInfo>,
+  individualesByLast: Map<string, ItemCostInfo[]>,
+  manualComps: Map<string, ManualComponent[]>
 ) {
-  let ingresosNetos = 0
-  let costoMerca = 0
-  let ivaDebito = 0
-  let ivaCredito = 0
-  let unidadesConCosto = 0
-  let unidadesSinCosto = 0
+  let ingresosNetos = 0, costoMerca = 0, ivaDebito = 0, ivaCredito = 0
+  let unidadesConCosto = 0, unidadesSinCosto = 0
+  const fuentesCostos = new Set<string>()
 
   for (const item of items) {
     const qty = Number(item.quantity ?? 0)
     const unitPrice = Number(item.unit_price ?? 0)
-    const ci = costsMap.get(item.item_id)
-    const ivaRate = ci?.iva_rate ?? 21
-    const ivaFactor = 1 + ivaRate / 100
+    const sellerSku = itemIdToSeller.get(item.item_id) ?? null
+    const itemRow = itemsBySku.get(sellerSku ?? '')
 
+    const itemCostInfo: ItemCostInfo | null = itemRow
+      ? {
+          seller_sku: itemRow.seller_sku,
+          cost: itemRow.cost ? Number(itemRow.cost) : 0,
+          iva_rate: itemRow.iva_rate ? Number(itemRow.iva_rate) : 21,
+        }
+      : null
+
+    const ivaRate = itemCostInfo?.iva_rate ?? 21
+    const ivaFactor = 1 + ivaRate / 100
     const subtotalConIva = unitPrice * qty
     const subtotalSinIva = subtotalConIva / ivaFactor
     ingresosNetos += subtotalSinIva
     ivaDebito += subtotalConIva - subtotalSinIva
 
-    if (ci && ci.cost > 0) {
-      const costoTotalSinIva = ci.cost * qty
-      costoMerca += costoTotalSinIva
-      ivaCredito += costoTotalSinIva * (ivaRate / 100)
-      unidadesConCosto += qty
-    } else {
+    const costRes = calcularCostoItem(sellerSku, qty, itemCostInfo, costsBySku, individualesByLast, manualComps)
+    fuentesCostos.add(costRes.source)
+
+    if (costRes.source === 'no-data') {
       unidadesSinCosto += qty
+    } else {
+      unidadesConCosto += qty
+      costoMerca += costRes.costoSinIva
+      ivaCredito += costRes.ivaCredito
     }
   }
 
@@ -78,11 +93,9 @@ function calcularFiscalOrden(
   const ivaAPagar = ivaDebito - ivaCredito
   const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio
   const ganancia = gananciaOperativa - ivaAPagar
-
   const totalBruto = Number(o.total_amount ?? 0)
   const margen = totalBruto > 0 && unidadesSinCosto === 0 && unidadesConCosto > 0
-    ? (ganancia / totalBruto) * 100
-    : null
+    ? (ganancia / totalBruto) * 100 : null
 
   return {
     ingresosNetos, costoMerca,
@@ -93,6 +106,7 @@ function calcularFiscalOrden(
     gananciaOperativa, ganancia, margen,
     unidadesConCosto, unidadesSinCosto,
     costoCompleto: unidadesSinCosto === 0 && unidadesConCosto > 0,
+    fuentesCostos: Array.from(fuentesCostos),
   }
 }
 
@@ -118,66 +132,79 @@ export default async function Hoy() {
     .gte('date_created', inicioDiaISO)
     .order('date_created', { ascending: false })
 
-  // Cargar costos e IVA de todos los items que aparecen en las órdenes
-  const allItemIds = new Set<string>()
-  for (const o of ordenesRaw ?? []) {
-    for (const it of o.order_items ?? []) {
-      if (it.item_id) allItemIds.add(it.item_id)
-    }
-  }
+  // Cargar todos los items + components
+  const [allItemsRes, manualCompsRes] = await Promise.all([
+    supabase.from('items').select('item_id, seller_sku, cost, iva_rate'),
+    supabase.from('product_components').select('parent_sku, component_sku, quantity'),
+  ])
 
-  const costsMap = new Map<string, ItemCostInfo>()
-  const itemIdsArr = Array.from(allItemIds)
-  for (let i = 0; i < itemIdsArr.length; i += 500) {
-    const chunk = itemIdsArr.slice(i, i + 500)
-    const { data } = await supabase
-      .from('items')
-      .select('item_id, cost, iva_rate')
-      .in('item_id', chunk)
-    if (data) {
-      for (const it of data as any[]) {
-        costsMap.set(it.item_id, {
-          cost: it.cost != null ? Number(it.cost) : 0,
-          iva_rate: it.iva_rate != null ? Number(it.iva_rate) : 21,
-        })
+  const allItems = (allItemsRes.data ?? []) as any[]
+  const itemsBySku = new Map<string, any>()
+  const itemIdToSeller = new Map<string, string | null>()
+  const allItemCosts: ItemCostInfo[] = []
+
+  for (const it of allItems) {
+    itemIdToSeller.set(it.item_id, it.seller_sku)
+    if (it.seller_sku) {
+      const existing = itemsBySku.get(it.seller_sku)
+      if (!existing || (it.cost && !existing.cost)) {
+        itemsBySku.set(it.seller_sku, it)
       }
     }
+    allItemCosts.push({
+      seller_sku: it.seller_sku,
+      cost: it.cost ? Number(it.cost) : 0,
+      iva_rate: it.iva_rate ? Number(it.iva_rate) : 21,
+    })
+  }
+
+  const costsBySku = new Map<string, ItemCostInfo>()
+  for (const ic of allItemCosts) {
+    if (ic.seller_sku && ic.cost > 0) {
+      costsBySku.set(ic.seller_sku, ic)
+    }
+  }
+  const individualesByLast = buildIndividualesByLastSegment(allItemCosts)
+
+  const manualComps = new Map<string, ManualComponent[]>()
+  for (const c of (manualCompsRes.data ?? []) as any[]) {
+    if (!manualComps.has(c.parent_sku)) manualComps.set(c.parent_sku, [])
+    manualComps.get(c.parent_sku)!.push({
+      component_sku: c.component_sku,
+      quantity: Number(c.quantity ?? 1),
+    })
   }
 
   const ordenes: OrderEnriched[] = (ordenesRaw ?? []).map((o: any) => {
     const items = Array.isArray(o.order_items) ? o.order_items : []
-    const fiscal = calcularFiscalOrden(o, items, costsMap)
+    const fiscal = calcularFiscalOrden(
+      o, items, itemIdToSeller, itemsBySku, costsBySku, individualesByLast, manualComps
+    )
     return {
-      order_id: o.order_id,
-      status: o.status,
+      order_id: o.order_id, status: o.status,
       total_amount: Number(o.total_amount ?? 0),
-      currency: o.currency,
-      buyer_nickname: o.buyer_nickname,
+      currency: o.currency, buyer_nickname: o.buyer_nickname,
       date_created: o.date_created,
       marketplace_fee: Number(o.marketplace_fee ?? 0),
       shipping_cost: Number(o.shipping_cost ?? 0),
       discounts: Number(o.discounts ?? 0),
       net_received: Number(o.net_received ?? 0),
       shipping_logistic_type: o.shipping_logistic_type ?? null,
-      items,
-      fiscal,
+      items, fiscal,
     }
   })
 
-  // Comparativa ayer (sin cambios)
+  // Comparativa ayer
   const inicioHoyMs = new Date(inicioDiaISO).getTime()
   const ahoraMs = Date.now()
   const duracionMs = ahoraMs - inicioHoyMs
   const inicioAyerMs = inicioHoyMs - 24 * 60 * 60 * 1000
   const finAyerMs = inicioAyerMs + duracionMs
-  const inicioAyerISO = new Date(inicioAyerMs).toISOString()
-  const finAyerISO = new Date(finAyerMs).toISOString()
 
   const { data: ayerRaw } = await supabase
-    .from('orders')
-    .select('status, total_amount')
-    .gte('date_created', inicioAyerISO)
-    .lt('date_created', finAyerISO)
+    .from('orders').select('status, total_amount')
+    .gte('date_created', new Date(inicioAyerMs).toISOString())
+    .lt('date_created', new Date(finAyerMs).toISOString())
 
   const ayerOrdenes = (ayerRaw ?? []) as { status: string; total_amount: number }[]
 
@@ -196,15 +223,13 @@ export default async function Hoy() {
   const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketFull = ventasFullPagadas.length > 0 ? facturacionFull / ventasFullPagadas.length : 0
   const porcentajeFull = ventasPagadas.length > 0
-    ? (ventasFullPagadas.length / ventasPagadas.length) * 100
-    : 0
+    ? (ventasFullPagadas.length / ventasPagadas.length) * 100 : 0
 
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
   const fechaHoy = new Date().toLocaleDateString('es-AR', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-    timeZone: TZ,
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: TZ,
   })
 
   const labelComparacion = 'vs ayer'
@@ -230,8 +255,7 @@ export default async function Hoy() {
   const renderCambio = (cambio: Cambio, invertColor?: boolean) => {
     if (!cambio) return <p className="kpi-cambio cambio-flat">— sin datos previos</p>
     const isGood = cambio.trend === 'flat' ? null : (cambio.trend === 'up') !== !!invertColor
-    const className =
-      cambio.trend === 'flat' ? 'cambio-flat' : (isGood ? 'cambio-good' : 'cambio-bad')
+    const className = cambio.trend === 'flat' ? 'cambio-flat' : (isGood ? 'cambio-good' : 'cambio-bad')
     const arrow = cambio.trend === 'up' ? '↑' : cambio.trend === 'down' ? '↓' : '='
     return (
       <p className={`kpi-cambio ${className}`}>
@@ -266,9 +290,7 @@ export default async function Hoy() {
           defaultOpen={false}
         >
           {ordenes.length === 0 ? (
-            <p className="empty">
-              Todavía no hay ventas hoy. Apretá &quot;Actualizar ventas&quot; para sincronizar.
-            </p>
+            <p className="empty">Todavía no hay ventas hoy. Apretá &quot;Actualizar ventas&quot; para sincronizar.</p>
           ) : (
             <VentasTabla ordenes={ordenes} mostrarHora={true} timeZone={TZ} />
           )}
