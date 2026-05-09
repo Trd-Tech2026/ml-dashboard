@@ -33,7 +33,7 @@ export default function Sidebar() {
     { href: '/', label: 'Inicio', icon: '🏠' },
     { href: '/ventas/hoy', label: 'Ventas', icon: '🛒' },
     { href: '/stock', label: 'Stock', icon: '📦' },
-    { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰', soon: true },
+    { href: '/rentabilidad', label: 'Rentabilidad', icon: '💰' },
   ]
 
   const isActive = (href: string) => {

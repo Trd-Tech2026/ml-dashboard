@@ -24,7 +24,7 @@ export default function Hub() {
       title: 'Rentabilidad',
       description: 'Ganancia real por venta y producto',
       accent: 'var(--warning)',
-      available: false,
+      available: true,
     },
   ]
 
