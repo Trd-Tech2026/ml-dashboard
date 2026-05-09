@@ -16,7 +16,6 @@ function toMLDate(input: string | Date): string {
 }
 
 async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
-  console.log('Refrescando token...')
   const refreshRes = await fetch('https://api.mercadolibre.com/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -28,10 +27,7 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
     })
   })
   const refreshData = await refreshRes.json()
-  if (!refreshData.access_token) {
-    console.log('Refresh falló:', JSON.stringify(refreshData))
-    return null
-  }
+  if (!refreshData.access_token) return null
   const nuevoExpiresAt = new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
   await supabase
     .from('ml_tokens')
@@ -41,7 +37,6 @@ async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promi
       expires_at: nuevoExpiresAt
     })
     .eq('ml_user_id', tokenRow.ml_user_id)
-  console.log('Token refrescado OK')
   return refreshData.access_token
 }
 
@@ -62,27 +57,19 @@ async function fetchShippingData(shippingId: string | number, token: string) {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.status !== 200) return { costoSeller: 0, bonificacion: 0 }
+    if (res.status !== 200) return { bonificacionReceiver: 0 }
     const data = await res.json()
-
-    // Costo que paga el vendedor (ej: cuando es Colecta/Full y envío gratis)
-    const costoSeller = Number(data?.senders?.[0]?.cost ?? data?.senders?.cost ?? 0)
-
-    // Bonificación que ML le da al receiver (ej: Flex)
-    // Sumamos todas las promotions
+    // Bonificación que ML aplica a la operación (lo que nos importa)
     const discounts = data?.receiver?.discounts ?? []
-    const bonificacion = Array.isArray(discounts)
+    const bonificacionReceiver = Array.isArray(discounts)
       ? discounts.reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
-
-    return { costoSeller, bonificacion }
+    return { bonificacionReceiver }
   } catch {
-    return { costoSeller: 0, bonificacion: 0 }
+    return { bonificacionReceiver: 0 }
   }
 }
 
-// NUEVO: trae el logistic_type del shipment (Full = "fulfillment", Flex = "self_service",
-// Colecta = "cross_docking", etc). Es la información congelada al momento de la venta.
 async function fetchShipmentInfo(shippingId: string | number, token: string) {
   try {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
@@ -90,37 +77,117 @@ async function fetchShipmentInfo(shippingId: string | number, token: string) {
     })
     if (res.status !== 200) return { logistic_type: null as string | null }
     const data = await res.json()
-    return {
-      logistic_type: (data?.logistic_type ?? null) as string | null
-    }
+    return { logistic_type: (data?.logistic_type ?? null) as string | null }
   } catch {
     return { logistic_type: null as string | null }
   }
 }
 
-// Calcula los componentes financieros sumando todos los charges_details de TODOS los payments
-function calcularComponentesPagos(payments: any[]) {
-  let comision = 0
-  let impuestos = 0
+// =============================================================
+// ANÁLISIS FISCAL: separar cargos / impuestos / impuesto fantasma
+// =============================================================
+type FiscalBreakdown = {
+  cargos_comision: number
+  cargos_costo_fijo: number
+  cargos_financiacion: number
+  cargos_otros: number
+  cargos_total: number
+  imp_creditos_debitos: number
+  imp_creditos_debitos_envio: number  // calculado, no viene de API
+  imp_iibb_total: number
+  imp_iibb_jurisdicciones: Record<string, number>
+  imp_otros: number
+  imp_total: number
+}
+
+function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreakdown {
+  const result: FiscalBreakdown = {
+    cargos_comision: 0,
+    cargos_costo_fijo: 0,
+    cargos_financiacion: 0,
+    cargos_otros: 0,
+    cargos_total: 0,
+    imp_creditos_debitos: 0,
+    imp_creditos_debitos_envio: 0,
+    imp_iibb_total: 0,
+    imp_iibb_jurisdicciones: {},
+    imp_otros: 0,
+    imp_total: 0,
+  }
 
   for (const mp of payments) {
     if (!mp) continue
     const charges = mp.charges_details ?? []
     for (const c of charges) {
       const amount = Number(c.amounts?.original ?? 0)
-      if (c.type === 'fee') comision += amount
-      else if (c.type === 'tax') impuestos += amount
-    }
-    // Backup: fee_details con fee_payer = collector (algunos casos)
-    const feeDetails = mp.fee_details ?? []
-    for (const f of feeDetails) {
-      if (f.fee_payer === 'collector') {
-        comision += Number(f.amount ?? 0)
+      const refunded = Number(c.amounts?.refunded ?? 0)
+      const neto = amount - refunded
+      const name = (c.name ?? '').toLowerCase()
+      const type = c.type
+
+      if (type === 'fee') {
+        // Cargos puros de ML
+        if (name.includes('meli_percentage_fee')) {
+          result.cargos_comision += neto
+        } else if (name.includes('flat_fee') || name.includes('fixed_fee')) {
+          result.cargos_costo_fijo += neto
+        } else if (name.includes('financing')) {
+          result.cargos_financiacion += neto
+        } else {
+          result.cargos_otros += neto
+        }
+      } else if (type === 'tax') {
+        // Impuestos retenidos
+        if (name.includes('debitos_creditos')) {
+          result.imp_creditos_debitos += neto
+        } else if (name.includes('iibb') || name.includes('sirtac')) {
+          // Identificar jurisdicción del nombre (ej: tax_withholding_sirtac-caba → caba)
+          const jurisdiccion = extraerJurisdiccion(c.name)
+          result.imp_iibb_total += neto
+          result.imp_iibb_jurisdicciones[jurisdiccion] =
+            (result.imp_iibb_jurisdicciones[jurisdiccion] ?? 0) + neto
+        } else {
+          result.imp_otros += neto
+        }
       }
+      // Otros tipos no contemplados se ignoran
     }
   }
 
-  return { comision, impuestos }
+  result.cargos_total =
+    result.cargos_comision +
+    result.cargos_costo_fijo +
+    result.cargos_financiacion +
+    result.cargos_otros
+
+  // Impuesto fantasma: 0.6% de la bonificación de envío (ML lo aplica pero no expone)
+  if (bonificacionEnvio > 0) {
+    result.imp_creditos_debitos_envio = Math.round(bonificacionEnvio * 0.006 * 100) / 100
+  }
+
+  result.imp_total =
+    result.imp_creditos_debitos +
+    result.imp_creditos_debitos_envio +
+    result.imp_iibb_total +
+    result.imp_otros
+
+  return result
+}
+
+function extraerJurisdiccion(name: string | null | undefined): string {
+  if (!name) return 'desconocida'
+  const lower = name.toLowerCase()
+  // Casos: tax_withholding_sirtac-caba, tax_withholding_sirtac-buenos_aires, tax_withholding_collector-iibb_tucuman
+  if (lower.includes('iibb_tucuman')) return 'tucuman'
+  if (lower.includes('sirtac-')) {
+    const parts = lower.split('sirtac-')
+    return parts[1] ?? 'sirtac_otra'
+  }
+  if (lower.includes('iibb_')) {
+    const parts = lower.split('iibb_')
+    return parts[1] ?? 'iibb_otra'
+  }
+  return 'desconocida'
 }
 
 export async function GET() {
@@ -190,20 +257,16 @@ export async function GET() {
 
   while (pagina < MAX_PAGES) {
     pagina++
-
     const { url, modo } = buildUrl(offset)
     modoSync = modo
 
-    let ordersRes = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    let ordersRes = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     let ordersData = await ordersRes.json()
 
     if (ordersRes.status === 401 && !yaRefresque) {
-      console.log('Token rechazado por ML, intentando refresh...')
       const nuevoToken = await refreshToken(supabase, tokenRow)
       if (!nuevoToken) {
-        return NextResponse.json({ error: 'No se pudo refrescar el token. Hacé login de nuevo.' }, { status: 401 })
+        return NextResponse.json({ error: 'No se pudo refrescar el token' }, { status: 401 })
       }
       token = nuevoToken
       yaRefresque = true
@@ -212,7 +275,7 @@ export async function GET() {
     }
 
     if (ordersRes.status !== 200) {
-      console.log('ML error en página', pagina, ':', JSON.stringify(ordersData))
+      console.log('ML error pagina', pagina, ':', JSON.stringify(ordersData))
       huboError = true
       break
     }
@@ -225,19 +288,16 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // Para cada orden: traer payments MP + datos de envío + logistic_type
+    // Procesar cada orden
     const ordersConFinanzas = await Promise.all(results.map(async (order: any) => {
       const total = Number(order.total_amount ?? 0)
 
-      // 1. Traer todos los payments de MP
       const paymentIds = (order.payments ?? []).map((p: any) => p.id).filter(Boolean)
       const mpPayments = await Promise.all(
         paymentIds.map((id: any) => fetchMPPayment(id, token))
       )
       const validMp = mpPayments.filter(Boolean)
 
-      // 2. Traer datos de envío (costos) Y tipo logístico EN PARALELO
-      let costoSeller = 0
       let bonificacion = 0
       let shippingLogisticType: string | null = null
       if (order.shipping?.id) {
@@ -245,31 +305,35 @@ export async function GET() {
           fetchShippingData(order.shipping.id, token),
           fetchShipmentInfo(order.shipping.id, token),
         ])
-        costoSeller = ship.costoSeller
-        bonificacion = ship.bonificacion
+        bonificacion = ship.bonificacionReceiver
         shippingLogisticType = info.logistic_type
       }
 
-      // 3. Calcular componentes
-      const { comision, impuestos } = calcularComponentesPagos(validMp)
+      // Análisis fiscal completo
+      const fiscal = analizarFiscal(validMp, bonificacion)
 
-      // 4. Net received al estilo ML
-      // Recibís = total - comisión - impuestos - costo_envío_seller + bonificación
+      // Net received real: precio - cargos - impuestos + bonificación
+      // (No restamos shipping_cost porque shipment_costs.senders.cost es informativo,
+      // la bonificación ya neta lo que pagamos efectivamente)
       const net_received = validMp.length > 0
-        ? total - comision - impuestos - costoSeller + bonificacion
+        ? total - fiscal.cargos_total - fiscal.imp_total + bonificacion
         : 0
 
+      // Para retrocompat, marketplace_fee = solo cargos (sin impuestos)
+      // shipping_cost = 0 (deprecado, lo dejamos en 0 para no romper código)
       return {
         order,
-        marketplace_fee: comision + impuestos,
-        shipping_cost: costoSeller,
+        marketplace_fee: fiscal.cargos_total,
+        shipping_cost: 0,
         discounts: bonificacion,
+        bonificacion_envio: bonificacion,
         net_received,
         shipping_logistic_type: shippingLogisticType,
+        fiscal,
       }
     }))
 
-    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, net_received, shipping_logistic_type }) => ({
+    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, bonificacion_envio, net_received, shipping_logistic_type, fiscal }) => ({
       order_id: order.id,
       status: order.status,
       total_amount: Number(order.total_amount ?? 0),
@@ -284,6 +348,20 @@ export async function GET() {
       discounts,
       net_received,
       shipping_logistic_type,
+      // Campos fiscales nuevos
+      cargos_comision: fiscal.cargos_comision,
+      cargos_costo_fijo: fiscal.cargos_costo_fijo,
+      cargos_financiacion: fiscal.cargos_financiacion,
+      cargos_otros: fiscal.cargos_otros,
+      cargos_total: fiscal.cargos_total,
+      imp_creditos_debitos: fiscal.imp_creditos_debitos,
+      imp_creditos_debitos_envio: fiscal.imp_creditos_debitos_envio,
+      imp_iibb_total: fiscal.imp_iibb_total,
+      imp_iibb_jurisdicciones: fiscal.imp_iibb_jurisdicciones,
+      imp_otros: fiscal.imp_otros,
+      imp_total: fiscal.imp_total,
+      bonificacion_envio,
+      fiscal_v2: true,
     }))
 
     const itemsToInsert = results.flatMap((order: any) =>
@@ -307,17 +385,13 @@ export async function GET() {
     }
 
     if (itemsToInsert.length > 0) {
-      const { error: itemsError } = await supabase
+      await supabase
         .from('order_items')
         .upsert(itemsToInsert, { onConflict: 'order_id,item_id' })
-
-      if (itemsError) {
-        console.log('Bulk items upsert error:', JSON.stringify(itemsError))
-      }
     }
 
     sincronizadas += results.length
-    console.log(`Página ${pagina} OK — ${sincronizadas}/${totalDisponible}`)
+    console.log(`Pagina ${pagina} OK - ${sincronizadas}/${totalDisponible}`)
 
     if (results.length < LIMIT) break
     offset += LIMIT
@@ -334,7 +408,7 @@ export async function GET() {
     ok: !huboError,
     modo: modoSync,
     desde: lastSyncAt,
-    mensaje: `${sincronizadas} órdenes sincronizadas (${modoSync})`,
+    mensaje: `${sincronizadas} ordenes sincronizadas (${modoSync})`,
     total_disponible: totalDisponible,
     paginas_procesadas: pagina,
     refresh_aplicado: yaRefresque
