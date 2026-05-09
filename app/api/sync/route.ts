@@ -63,12 +63,6 @@ async function fetchShippingData(shippingId: string | number, token: string) {
     const receiverDiscounts = data?.receiver?.discounts ?? []
     const senderDiscounts = data?.senders?.[0]?.discounts ?? []
 
-    // Bonificaciones que SÍ van al vendedor:
-    // - receiver.discounts con type='loyal' (programa de fidelidad ML, ML te paga la bonif)
-    // - senders.discounts con type='mandatory' (descuento obligatorio que ML le hace al vendedor)
-    // NO contar:
-    // - receiver.discounts con type='ratio' (descuento que ML le da al comprador, no a vos)
-
     const bonifLoyal = Array.isArray(receiverDiscounts)
       ? receiverDiscounts
           .filter((d: any) => d.type === 'loyal')
@@ -101,7 +95,10 @@ async function fetchShipmentInfo(shippingId: string | number, token: string) {
 }
 
 // =============================================================
-// ANÁLISIS FISCAL: separar cargos / impuestos / impuesto fantasma
+// ANÁLISIS FISCAL: separar cargos / impuestos
+// IMPORTANTE: solo cuenta cargos donde "from === collector" (los que paga el vendedor).
+// Los cargos donde "from === payer" (cliente paga al MP, ej: recargo cuotas con interés)
+// NO son del vendedor y deben ignorarse.
 // =============================================================
 type FiscalBreakdown = {
   cargos_comision: number
@@ -136,6 +133,14 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
     if (!mp) continue
     const charges = mp.charges_details ?? []
     for (const c of charges) {
+      // 🔥 CRÍTICO: solo contar cargos que paga el vendedor
+      // Los cargos donde "from === payer" son del cliente (ej: recargo cuotas)
+      // y NO afectan al vendedor.
+      const fromAccount = c.accounts?.from ?? null
+      const feePayer = c.fee_payer ?? null
+      const esDelVendedor = fromAccount === 'collector' || feePayer === 'collector'
+      if (!esDelVendedor) continue
+
       const amount = Number(c.amounts?.original ?? 0)
       const refunded = Number(c.amounts?.refunded ?? 0)
       const neto = amount - refunded

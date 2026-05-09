@@ -56,6 +56,9 @@ function extraerJurisdiccion(name: string | null | undefined): string {
   return 'desconocida'
 }
 
+// IMPORTANTE: solo cuenta cargos donde "from === collector" (vendedor).
+// Los cargos donde "from === payer" (ej: recargo cuotas con interés que paga el cliente)
+// NO son del vendedor.
 function analizarFiscal(payments: any[], bonificacionEnvio: number) {
   const result: any = {
     cargos_comision: 0, cargos_costo_fijo: 0, cargos_financiacion: 0, cargos_otros: 0, cargos_total: 0,
@@ -65,6 +68,12 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number) {
   for (const mp of payments) {
     if (!mp) continue
     for (const c of mp.charges_details ?? []) {
+      // 🔥 Solo contar cargos del vendedor
+      const fromAccount = c.accounts?.from ?? null
+      const feePayer = c.fee_payer ?? null
+      const esDelVendedor = fromAccount === 'collector' || feePayer === 'collector'
+      if (!esDelVendedor) continue
+
       const amount = Number(c.amounts?.original ?? 0)
       const refunded = Number(c.amounts?.refunded ?? 0)
       const neto = amount - refunded
@@ -121,7 +130,6 @@ export async function GET(request: Request) {
   if (!tokenData) return NextResponse.json({ ok: false, error: 'No hay token de ML' }, { status: 401 })
   const token = tokenData.access_token
 
-  // Query base
   let q = supabase
     .from('orders')
     .select('order_id, total_amount, status, date_created')
@@ -129,7 +137,6 @@ export async function GET(request: Request) {
     .order('date_created', { ascending: false })
     .limit(limit)
 
-  // Filtro opcional: solo las pendientes (sin fiscal_v2)
   if (onlyPending) {
     q = q.or('fiscal_v2.is.null,fiscal_v2.eq.false')
   }
