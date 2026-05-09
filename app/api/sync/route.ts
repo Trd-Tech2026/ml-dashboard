@@ -3,6 +3,11 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 export const maxDuration = 60
 
+// 🔥 Costo Flex promedio ponderado (calculado de SOLDATTI semana 20-25 abril)
+// CABA $2900 + 1er $3700 + 2do $4300 + 3er $6600 + Camp/Zara $7300
+// Mañana se reemplaza por lógica por zona (tabla flex_shipping_costs)
+const COSTO_FLEX_PROMEDIO = 4040
+
 type TokenRow = {
   ml_user_id: string
   access_token: string
@@ -57,7 +62,7 @@ async function fetchShippingData(shippingId: string | number, token: string) {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.status !== 200) return { bonificacionReceiver: 0 }
+    if (res.status !== 200) return { bonificacionReceiver: 0, envioCobradoCliente: 0 }
     const data = await res.json()
 
     const receiverDiscounts = data?.receiver?.discounts ?? []
@@ -75,9 +80,15 @@ async function fetchShippingData(shippingId: string | number, token: string) {
           .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
 
-    return { bonificacionReceiver: bonifLoyal + bonifMandatory }
+    // 🔥 Lo que el cliente pagó por envío - ML te transfiere ese dinero
+    const envioCobradoCliente = Number(data?.receiver?.cost ?? 0)
+
+    return {
+      bonificacionReceiver: bonifLoyal + bonifMandatory,
+      envioCobradoCliente,
+    }
   } catch {
-    return { bonificacionReceiver: 0 }
+    return { bonificacionReceiver: 0, envioCobradoCliente: 0 }
   }
 }
 
@@ -94,12 +105,6 @@ async function fetchShipmentInfo(shippingId: string | number, token: string) {
   }
 }
 
-// =============================================================
-// ANÁLISIS FISCAL: separar cargos / impuestos
-// IMPORTANTE: solo cuenta cargos donde "from === collector" (los que paga el vendedor).
-// Los cargos donde "from === payer" (cliente paga al MP, ej: recargo cuotas con interés)
-// NO son del vendedor y deben ignorarse.
-// =============================================================
 type FiscalBreakdown = {
   cargos_comision: number
   cargos_costo_fijo: number
@@ -133,9 +138,6 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
     if (!mp) continue
     const charges = mp.charges_details ?? []
     for (const c of charges) {
-      // 🔥 CRÍTICO: solo contar cargos que paga el vendedor
-      // Los cargos donde "from === payer" son del cliente (ej: recargo cuotas)
-      // y NO afectan al vendedor.
       const fromAccount = c.accounts?.from ?? null
       const feePayer = c.fee_payer ?? null
       const esDelVendedor = fromAccount === 'collector' || feePayer === 'collector'
@@ -178,7 +180,6 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number): FiscalBreak
     result.cargos_financiacion +
     result.cargos_otros
 
-  // Impuesto fantasma: 0.6% de la bonificación de envío
   if (bonificacionEnvio > 0) {
     result.imp_creditos_debitos_envio = Math.round(bonificacionEnvio * 0.006 * 100) / 100
   }
@@ -315,6 +316,7 @@ export async function GET() {
       const validMp = mpPayments.filter(Boolean)
 
       let bonificacion = 0
+      let envioCobradoCliente = 0
       let shippingLogisticType: string | null = null
       if (order.shipping?.id) {
         const [ship, info] = await Promise.all([
@@ -322,13 +324,18 @@ export async function GET() {
           fetchShipmentInfo(order.shipping.id, token),
         ])
         bonificacion = ship.bonificacionReceiver
+        envioCobradoCliente = ship.envioCobradoCliente
         shippingLogisticType = info.logistic_type
       }
 
       const fiscal = analizarFiscal(validMp, bonificacion)
 
+      // 🔥 Costo Flex estimado: solo si es self_service
+      const costoFlexEstimado = shippingLogisticType === 'self_service' ? COSTO_FLEX_PROMEDIO : 0
+
+      // 🔥 Net received corregido: incluye envío cobrado, resta costo Flex
       const net_received = validMp.length > 0
-        ? total - fiscal.cargos_total - fiscal.imp_total + bonificacion
+        ? total + envioCobradoCliente - fiscal.cargos_total - fiscal.imp_total + bonificacion - costoFlexEstimado
         : 0
 
       return {
@@ -337,13 +344,15 @@ export async function GET() {
         shipping_cost: 0,
         discounts: bonificacion,
         bonificacion_envio: bonificacion,
+        envio_cobrado_cliente: envioCobradoCliente,
+        costo_flex_estimado: costoFlexEstimado,
         net_received,
         shipping_logistic_type: shippingLogisticType,
         fiscal,
       }
     }))
 
-    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, bonificacion_envio, net_received, shipping_logistic_type, fiscal }) => ({
+    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, net_received, shipping_logistic_type, fiscal }) => ({
       order_id: order.id,
       status: order.status,
       total_amount: Number(order.total_amount ?? 0),
@@ -370,6 +379,8 @@ export async function GET() {
       imp_otros: fiscal.imp_otros,
       imp_total: fiscal.imp_total,
       bonificacion_envio,
+      envio_cobrado_cliente,
+      costo_flex_estimado,
       fiscal_v2: true,
     }))
 

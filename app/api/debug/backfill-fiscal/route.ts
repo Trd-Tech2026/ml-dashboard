@@ -4,6 +4,8 @@ import { createClient } from '@supabase/supabase-js'
 export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
+const COSTO_FLEX_PROMEDIO = 4040
+
 async function fetchMPPayment(paymentId: number, token: string): Promise<any | null> {
   try {
     const res = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
@@ -19,7 +21,7 @@ async function fetchShippingData(shippingId: number, token: string) {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}/costs`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.status !== 200) return 0
+    if (res.status !== 200) return { bonif: 0, envioCobrado: 0 }
     const data = await res.json()
 
     const receiverDiscounts = data?.receiver?.discounts ?? []
@@ -37,8 +39,23 @@ async function fetchShippingData(shippingId: number, token: string) {
           .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
 
-    return bonifLoyal + bonifMandatory
-  } catch { return 0 }
+    const envioCobrado = Number(data?.receiver?.cost ?? 0)
+
+    return { bonif: bonifLoyal + bonifMandatory, envioCobrado }
+  } catch { return { bonif: 0, envioCobrado: 0 } }
+}
+
+async function fetchShipmentInfo(shippingId: number, token: string) {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return { logistic_type: null as string | null }
+    const data = await res.json()
+    return { logistic_type: (data?.logistic_type ?? null) as string | null }
+  } catch {
+    return { logistic_type: null as string | null }
+  }
 }
 
 function extraerJurisdiccion(name: string | null | undefined): string {
@@ -56,9 +73,6 @@ function extraerJurisdiccion(name: string | null | undefined): string {
   return 'desconocida'
 }
 
-// IMPORTANTE: solo cuenta cargos donde "from === collector" (vendedor).
-// Los cargos donde "from === payer" (ej: recargo cuotas con interés que paga el cliente)
-// NO son del vendedor.
 function analizarFiscal(payments: any[], bonificacionEnvio: number) {
   const result: any = {
     cargos_comision: 0, cargos_costo_fijo: 0, cargos_financiacion: 0, cargos_otros: 0, cargos_total: 0,
@@ -68,7 +82,6 @@ function analizarFiscal(payments: any[], bonificacionEnvio: number) {
   for (const mp of payments) {
     if (!mp) continue
     for (const c of mp.charges_details ?? []) {
-      // 🔥 Solo contar cargos del vendedor
       const fromAccount = c.accounts?.from ?? null
       const feePayer = c.fee_payer ?? null
       const esDelVendedor = fromAccount === 'collector' || feePayer === 'collector'
@@ -138,7 +151,7 @@ export async function GET(request: Request) {
     .limit(limit)
 
   if (onlyPending) {
-    q = q.or('fiscal_v2.is.null,fiscal_v2.eq.false')
+    q = q.or('envio_cobrado_cliente.is.null,envio_cobrado_cliente.eq.0')
   }
 
   const { data: orders, error } = await q
@@ -175,13 +188,23 @@ export async function GET(request: Request) {
       const validMp = mpPayments.filter(Boolean)
 
       let bonif = 0
+      let envioCobrado = 0
+      let logisticType: string | null = null
       if (order.shipping?.id) {
-        bonif = await fetchShippingData(order.shipping.id, token)
+        const [ship, info] = await Promise.all([
+          fetchShippingData(order.shipping.id, token),
+          fetchShipmentInfo(order.shipping.id, token),
+        ])
+        bonif = ship.bonif
+        envioCobrado = ship.envioCobrado
+        logisticType = info.logistic_type
       }
 
       const fiscal = analizarFiscal(validMp, bonif)
+      const costoFlex = logisticType === 'self_service' ? COSTO_FLEX_PROMEDIO : 0
+
       const net_received = validMp.length > 0
-        ? total - fiscal.cargos_total - fiscal.imp_total + bonif
+        ? total + envioCobrado - fiscal.cargos_total - fiscal.imp_total + bonif - costoFlex
         : 0
 
       const updateData = {
@@ -189,6 +212,9 @@ export async function GET(request: Request) {
         shipping_cost: 0,
         discounts: bonif,
         bonificacion_envio: bonif,
+        envio_cobrado_cliente: envioCobrado,
+        costo_flex_estimado: costoFlex,
+        shipping_logistic_type: logisticType,
         net_received,
         cargos_comision: fiscal.cargos_comision,
         cargos_costo_fijo: fiscal.cargos_costo_fijo,
@@ -205,7 +231,11 @@ export async function GET(request: Request) {
       }
 
       if (muestra.length < 5) {
-        muestra.push({ order_id: o.order_id, total, net_received, bonif, fiscal })
+        muestra.push({ 
+          order_id: o.order_id, total, net_received, 
+          envio_cobrado_cliente: envioCobrado, costo_flex_estimado: costoFlex,
+          logistic_type: logisticType, bonif, fiscal 
+        })
       }
 
       if (!dryRun) {
