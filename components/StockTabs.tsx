@@ -3,7 +3,7 @@
 import { Suspense } from 'react'
 import { usePathname, useSearchParams, useRouter } from 'next/navigation'
 
-type TabKey = 'productos' | 'combos' | 'facturas' | 'historial'
+type TabKey = 'productos' | 'combos' | 'facturas' | 'historial' | 'masivo'
 
 function StockTabsInner() {
   const pathname = usePathname()
@@ -15,6 +15,7 @@ function StockTabsInner() {
   let activeTab: TabKey = 'productos'
   if (pathname === '/stock/ingresos') activeTab = 'facturas'
   else if (pathname === '/stock/historial') activeTab = 'historial'
+  else if (pathname === '/stock/cargador-masivo') activeTab = 'masivo'
   else if (pathname === '/stock' && tab === 'combos') activeTab = 'combos'
   else activeTab = 'productos'
 
@@ -43,6 +44,12 @@ function StockTabsInner() {
         onClick={() => router.push('/stock/historial')}
       >
         Historial
+      </button>
+      <button
+        className={`tab ${activeTab === 'masivo' ? 'tab-active' : ''}`}
+        onClick={() => router.push('/stock/cargador-masivo')}
+      >
+        📥 Cargador masivo
       </button>
 
       <style jsx>{`
