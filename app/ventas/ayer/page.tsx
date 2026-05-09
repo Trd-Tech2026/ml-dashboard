@@ -1,6 +1,12 @@
 import { createClient } from '@supabase/supabase-js'
 import VentasTabla, { OrderWithItems } from '../../components/VentasTabla'
 import CollapsibleSection from '../../components/CollapsibleSection'
+import {
+  buildIndividualesByLastSegment,
+  calcularCostoItem,
+  type ItemCostInfo,
+  type ManualComponent,
+} from '../../lib/combos'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,25 +19,17 @@ type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
 function rangoDiaArgentina(diasAtras: number): { desdeISO: string; hastaISO: string } {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(ahora)
-
   const [year, month, day] = fechaAR.split('-').map(Number)
-
   const inicio = new Date(Date.UTC(year, month - 1, day))
   inicio.setUTCDate(inicio.getUTCDate() - diasAtras)
   const inicioStr = inicio.toISOString().slice(0, 10)
-
   const fin = new Date(Date.UTC(year, month - 1, day))
   fin.setUTCDate(fin.getUTCDate() - diasAtras + 1)
   const finStr = fin.toISOString().slice(0, 10)
-
   const desdeISO = new Date(`${inicioStr}T00:00:00-03:00`).toISOString()
   const hastaISO = new Date(`${finStr}T00:00:00-03:00`).toISOString()
-
   return { desdeISO, hastaISO }
 }
 
@@ -45,13 +43,88 @@ function calcCambio(actual: number, previo: number): Cambio {
   return { pct, trend: pct > 0 ? 'up' : 'down' }
 }
 
+function calcularFiscalOrden(
+  o: any,
+  items: any[],
+  itemIdToSeller: Map<string, string | null>,
+  itemsBySku: Map<string, any>,
+  costsBySku: Map<string, ItemCostInfo>,
+  individualesByLast: Map<string, ItemCostInfo[]>,
+  manualComps: Map<string, ManualComponent[]>
+) {
+  let ingresosNetos = 0, costoMerca = 0, ivaDebito = 0, ivaCredito = 0
+  let unidadesConCosto = 0, unidadesSinCosto = 0
+  const fuentesCostos = new Set<string>()
+
+  for (const item of items) {
+    const qty = Number(item.quantity ?? 0)
+    const unitPrice = Number(item.unit_price ?? 0)
+    const sellerSku = itemIdToSeller.get(item.item_id) ?? null
+    const itemRow = itemsBySku.get(sellerSku ?? '')
+
+    const itemCostInfo: ItemCostInfo | null = itemRow
+      ? {
+          seller_sku: itemRow.seller_sku,
+          cost: itemRow.cost ? Number(itemRow.cost) : 0,
+          iva_rate: itemRow.iva_rate ? Number(itemRow.iva_rate) : 21,
+        }
+      : null
+
+    const ivaRate = itemCostInfo?.iva_rate ?? 21
+    const ivaFactor = 1 + ivaRate / 100
+    const subtotalConIva = unitPrice * qty
+    const subtotalSinIva = subtotalConIva / ivaFactor
+    ingresosNetos += subtotalSinIva
+    ivaDebito += subtotalConIva - subtotalSinIva
+
+    const costRes = calcularCostoItem(sellerSku, qty, itemCostInfo, costsBySku, individualesByLast, manualComps)
+    fuentesCostos.add(costRes.source)
+
+    if (costRes.source === 'no-data') {
+      unidadesSinCosto += qty
+    } else {
+      unidadesConCosto += qty
+      costoMerca += costRes.costoSinIva
+      ivaCredito += costRes.ivaCredito
+    }
+  }
+
+  const cargosML = Number(o.cargos_total ?? o.marketplace_fee ?? 0)
+  const cargosComision = Number(o.cargos_comision ?? 0)
+  const cargosCostoFijo = Number(o.cargos_costo_fijo ?? 0)
+  const cargosFinanciacion = Number(o.cargos_financiacion ?? 0)
+  const retenciones = Number(o.imp_total ?? 0)
+  const impCreditosDebitos = Number(o.imp_creditos_debitos ?? 0)
+  const impCreditosDebitosEnvio = Number(o.imp_creditos_debitos_envio ?? 0)
+  const impIIBB = Number(o.imp_iibb_total ?? 0)
+  const bonificacionEnvio = Number(o.bonificacion_envio ?? o.discounts ?? 0)
+
+  const ivaAPagar = ivaDebito - ivaCredito
+  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio
+  const ganancia = gananciaOperativa - ivaAPagar
+  const totalBruto = Number(o.total_amount ?? 0)
+  const margen = totalBruto > 0 && unidadesSinCosto === 0 && unidadesConCosto > 0
+    ? (ganancia / totalBruto) * 100 : null
+
+  return {
+    ingresosNetos, costoMerca,
+    ivaDebito, ivaCredito, ivaAPagar,
+    cargosML, cargosComision, cargosCostoFijo, cargosFinanciacion,
+    retenciones, impCreditosDebitos, impCreditosDebitosEnvio, impIIBB,
+    bonificacionEnvio,
+    gananciaOperativa, ganancia, margen,
+    unidadesConCosto, unidadesSinCosto,
+    costoCompleto: unidadesSinCosto === 0 && unidadesConCosto > 0,
+    fuentesCostos: Array.from(fuentesCostos),
+  }
+}
+
 export default async function Ayer() {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
-  // === Rango AYER ===
   const { desdeISO, hastaISO } = rangoDiaArgentina(1)
 
   const { data: ordenesRaw } = await supabase
@@ -60,26 +133,87 @@ export default async function Ayer() {
       order_id, status, total_amount, currency, buyer_nickname,
       date_created, marketplace_fee, shipping_cost, discounts, net_received,
       shipping_logistic_type,
+      cargos_total, cargos_comision, cargos_costo_fijo, cargos_financiacion,
+      imp_total, imp_iibb_total, imp_creditos_debitos, imp_creditos_debitos_envio,
+      bonificacion_envio, fiscal_v2,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', desdeISO)
     .lt('date_created', hastaISO)
     .order('date_created', { ascending: false })
 
-  const ordenes: OrderEnriched[] = (ordenesRaw ?? []).map((o: any) => ({
-    order_id: o.order_id,
-    status: o.status,
-    total_amount: Number(o.total_amount ?? 0),
-    currency: o.currency,
-    buyer_nickname: o.buyer_nickname,
-    date_created: o.date_created,
-    marketplace_fee: Number(o.marketplace_fee ?? 0),
-    shipping_cost: Number(o.shipping_cost ?? 0),
-    discounts: Number(o.discounts ?? 0),
-    net_received: Number(o.net_received ?? 0),
-    shipping_logistic_type: o.shipping_logistic_type ?? null,
-    items: Array.isArray(o.order_items) ? o.order_items : [],
+  // Cargar items ML + items manuales + componentes
+  const [allItemsRes, manualItemsRes, manualCompsRes] = await Promise.all([
+    supabase.from('items').select('item_id, seller_sku, cost, iva_rate'),
+    supabase.from('manual_items').select('seller_sku, cost, iva_rate'),
+    supabase.from('product_components').select('parent_sku, component_sku, quantity'),
+  ])
+
+  const allItemsML = (allItemsRes.data ?? []) as any[]
+  const itemsManuales = ((manualItemsRes.data ?? []) as any[]).map((m: any) => ({
+    item_id: `MANUAL-${m.seller_sku}`,
+    seller_sku: m.seller_sku,
+    cost: m.cost,
+    iva_rate: m.iva_rate,
   }))
+  const allItems = [...allItemsML, ...itemsManuales]
+
+  const itemsBySku = new Map<string, any>()
+  const itemIdToSeller = new Map<string, string | null>()
+  const allItemCosts: ItemCostInfo[] = []
+
+  for (const it of allItems) {
+    itemIdToSeller.set(it.item_id, it.seller_sku)
+    if (it.seller_sku) {
+      const existing = itemsBySku.get(it.seller_sku)
+      if (!existing || (it.cost && !existing.cost)) {
+        itemsBySku.set(it.seller_sku, it)
+      }
+    }
+    allItemCosts.push({
+      seller_sku: it.seller_sku,
+      cost: it.cost ? Number(it.cost) : 0,
+      iva_rate: it.iva_rate ? Number(it.iva_rate) : 21,
+    })
+  }
+
+  const costsBySku = new Map<string, ItemCostInfo>()
+  for (const ic of allItemCosts) {
+    if (ic.seller_sku && ic.cost > 0) {
+      costsBySku.set(ic.seller_sku, ic)
+    }
+  }
+  const individualesByLast = buildIndividualesByLastSegment(allItemCosts)
+
+  const manualComps = new Map<string, ManualComponent[]>()
+  for (const c of (manualCompsRes.data ?? []) as any[]) {
+    if (!manualComps.has(c.parent_sku)) manualComps.set(c.parent_sku, [])
+    manualComps.get(c.parent_sku)!.push({
+      component_sku: c.component_sku,
+      quantity: Number(c.quantity ?? 1),
+    })
+  }
+
+  const ordenes: OrderEnriched[] = (ordenesRaw ?? []).map((o: any) => {
+    const items = Array.isArray(o.order_items) ? o.order_items : []
+    const fiscal = calcularFiscalOrden(
+      o, items, itemIdToSeller, itemsBySku, costsBySku, individualesByLast, manualComps
+    )
+    return {
+      order_id: o.order_id,
+      status: o.status,
+      total_amount: Number(o.total_amount ?? 0),
+      currency: o.currency,
+      buyer_nickname: o.buyer_nickname,
+      date_created: o.date_created,
+      marketplace_fee: Number(o.marketplace_fee ?? 0),
+      shipping_cost: Number(o.shipping_cost ?? 0),
+      discounts: Number(o.discounts ?? 0),
+      net_received: Number(o.net_received ?? 0),
+      shipping_logistic_type: o.shipping_logistic_type ?? null,
+      items, fiscal,
+    }
+  })
 
   // === Rango ANTEAYER (para comparativa) ===
   const { desdeISO: anteayerDesde, hastaISO: anteayerHasta } = rangoDiaArgentina(2)
@@ -91,26 +225,22 @@ export default async function Ayer() {
 
   const anteayerOrdenes = (anteayerRaw ?? []) as { status: string; total_amount: number }[]
 
-  // === Cálculos ayer ===
   const ventasPagadas = ordenes.filter(o => o.status === 'paid')
   const cancelaciones = ordenes.filter(o => o.status === 'cancelled')
   const facturacion = ventasPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketPromedio = ventasPagadas.length > 0 ? facturacion / ventasPagadas.length : 0
 
-  // === Cálculos anteayer ===
   const aaPagadas = anteayerOrdenes.filter(o => o.status === 'paid')
   const aaCancelaciones = anteayerOrdenes.filter(o => o.status === 'cancelled')
   const aaFacturacion = aaPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const aaTicket = aaPagadas.length > 0 ? aaFacturacion / aaPagadas.length : 0
 
-  // === Cálculos Full ===
   const ordenesFull = ordenes.filter(o => o.shipping_logistic_type === 'fulfillment')
   const ventasFullPagadas = ordenesFull.filter(o => o.status === 'paid')
   const facturacionFull = ventasFullPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const ticketFull = ventasFullPagadas.length > 0 ? facturacionFull / ventasFullPagadas.length : 0
   const porcentajeFull = ventasPagadas.length > 0
-    ? (ventasFullPagadas.length / ventasPagadas.length) * 100
-    : 0
+    ? (ventasFullPagadas.length / ventasPagadas.length) * 100 : 0
 
   const formatARS = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
@@ -145,8 +275,7 @@ export default async function Ayer() {
   const renderCambio = (cambio: Cambio, invertColor?: boolean) => {
     if (!cambio) return <p className="kpi-cambio cambio-flat">— sin datos previos</p>
     const isGood = cambio.trend === 'flat' ? null : (cambio.trend === 'up') !== !!invertColor
-    const className =
-      cambio.trend === 'flat' ? 'cambio-flat' : (isGood ? 'cambio-good' : 'cambio-bad')
+    const className = cambio.trend === 'flat' ? 'cambio-flat' : (isGood ? 'cambio-good' : 'cambio-bad')
     const arrow = cambio.trend === 'up' ? '↑' : cambio.trend === 'down' ? '↓' : '='
     return (
       <p className={`kpi-cambio ${className}`}>
