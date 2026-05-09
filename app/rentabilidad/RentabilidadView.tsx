@@ -147,14 +147,41 @@ export default function RentabilidadView({
 
       {activeTab === 'metricas' ? (
         <>
-          <div className="period-tabs">
+          <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
             {periodos.map(p => {
               const activo = period === p.value
+              const baseStyle: React.CSSProperties = {
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '10px 22px',
+                borderRadius: '10px',
+                fontSize: '13px',
+                fontWeight: 600,
+                textDecoration: 'none',
+                letterSpacing: '0.3px',
+                transition: 'all 0.18s ease',
+                border: '1px solid rgba(62, 229, 224, 0.4)',
+              }
+              const styleActivo: React.CSSProperties = {
+                ...baseStyle,
+                background: 'linear-gradient(135deg, #1ca0c4 0%, #3ee5e0 100%)',
+                color: '#0a121c',
+                borderColor: 'rgba(62, 229, 224, 0.7)',
+                boxShadow: '0 4px 18px rgba(62, 229, 224, 0.35)',
+              }
+              const styleInactivo: React.CSSProperties = {
+                ...baseStyle,
+                background: 'linear-gradient(135deg, #0d4d6e 0%, #1ca0c4 100%)',
+                color: '#ffffff',
+                opacity: 0.55,
+                boxShadow: '0 2px 10px rgba(28, 160, 196, 0.15)',
+              }
               return (
                 <Link
                   key={p.value}
                   href={`/rentabilidad?period=${p.value}`}
-                  className={`period-tab ${activo ? 'period-active' : ''}`}
+                  style={activo ? styleActivo : styleInactivo}
                 >
                   {p.label}
                 </Link>
