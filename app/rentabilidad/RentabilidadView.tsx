@@ -65,6 +65,11 @@ export default function RentabilidadView({
   const formatARSFull = (n: number) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(n)
 
+  const formatARSSigned = (n: number) => {
+    const formatted = formatARS(Math.abs(n))
+    return n < 0 ? `−${formatted}` : formatted
+  }
+
   const formatARSFullSigned = (n: number) => {
     const formatted = formatARSFull(Math.abs(n))
     return n < 0 ? `−${formatted}` : formatted
@@ -218,9 +223,7 @@ export default function RentabilidadView({
                   )}
                 </div>
                 <div className="hero-amount">{formatARSFullSigned(calcActual.ganancia)}</div>
-                <div className="hero-sub">
-                  después de IVA, comisiones, retenciones
-                </div>
+                <div className="hero-sub">después de IVA, comisiones, retenciones</div>
                 <div className="hero-cambio">
                   {renderCambio(cambioGanancia, labelComparacion)}
                 </div>
@@ -415,43 +418,6 @@ export default function RentabilidadView({
         .main-tab:hover { color: var(--text-secondary); }
         .main-tab.main-tab-active { color: #3ee5e0; border-bottom-color: #3ee5e0; }
 
-        /* PERIOD TABS estilo botón cyan TRDTECH */
-        .period-tabs {
-          display: flex;
-          gap: 10px;
-          margin-bottom: 16px;
-          flex-wrap: wrap;
-        }
-        .period-tab {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          padding: 10px 22px;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 600;
-          background: linear-gradient(135deg, #0d4d6e 0%, #1ca0c4 100%);
-          color: #ffffff;
-          border: 1px solid rgba(62, 229, 224, 0.4);
-          text-decoration: none;
-          letter-spacing: 0.3px;
-          transition: all 0.18s ease;
-          box-shadow: 0 2px 10px rgba(28, 160, 196, 0.15);
-          opacity: 0.55;
-        }
-        .period-tab:hover {
-          opacity: 0.85;
-          box-shadow: 0 4px 16px rgba(28, 160, 196, 0.3);
-          transform: translateY(-1px);
-        }
-        .period-tab.period-active {
-          opacity: 1;
-          background: linear-gradient(135deg, #1ca0c4 0%, #3ee5e0 100%);
-          color: #0a121c;
-          border-color: rgba(62, 229, 224, 0.7);
-          box-shadow: 0 4px 18px rgba(62, 229, 224, 0.35);
-        }
-
         .warn-banner {
           display: flex; gap: 10px; align-items: flex-start;
           background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3);
@@ -463,7 +429,6 @@ export default function RentabilidadView({
         .warn-link { color: var(--warning); font-weight: 600; }
         .warn-link:hover { text-decoration: underline; }
 
-        /* HERO PALPITANTE */
         @keyframes palpitar-trd {
           0%, 100% {
             border-color: rgba(62, 229, 224, 0.25);
@@ -579,7 +544,6 @@ export default function RentabilidadView({
         .cambio-bad { color: var(--danger); }
         .cambio-flat { color: var(--text-muted); }
 
-        /* BREAKDOWN: 2 cuadros separados abajo */
         .breakdown-row {
           display: grid;
           grid-template-columns: 1.6fr 1fr;
@@ -659,7 +623,6 @@ export default function RentabilidadView({
         }
         .link-btn:hover { color: #3ee5e0; }
 
-        /* MINI CARDS */
         .mini-cards {
           display: grid;
           grid-template-columns: repeat(6, 1fr);
@@ -708,11 +671,9 @@ export default function RentabilidadView({
           .header-title h1 { font-size: 22px; }
           .header-actions { display: grid; grid-template-columns: repeat(2, 1fr); }
           .btn-action { justify-content: center; }
-          .period-tabs { display: grid; grid-template-columns: repeat(3, 1fr); }
-          .period-tab { padding: 9px 6px; font-size: 12px; }
           .hero-trd { padding: 24px 20px; }
           .hero-row { flex-direction: column; }
-          .hero-amount { font-size: 44px; }
+          .hero-amount { font-size: 38px; }
           .hero-right { text-align: left; width: 100%; }
           .hero-margen { font-size: 30px; }
           .bk-card { padding: 16px 18px; }
