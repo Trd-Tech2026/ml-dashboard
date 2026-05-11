@@ -223,7 +223,7 @@ export default function RentabilidadView({
                   )}
                 </div>
                 <div className="hero-amount">{formatARSFullSigned(calcActual.ganancia)}</div>
-                <div className="hero-sub">después de IVA, comisiones, retenciones</div>
+                <div className="hero-sub">después de IVA, comisiones, retenciones, costo Flex</div>
                 <div className="hero-cambio">
                   {renderCambio(cambioGanancia, labelComparacion)}
                 </div>
@@ -278,6 +278,22 @@ export default function RentabilidadView({
                   <span className="bk-value bk-value-pos">+{formatARS(calcActual.bonificacionEnvio)}</span>
                   <span className="bk-detail">{calcActual.flexCount} ventas Flex</span>
                 </div>
+                {/* 🔥 NUEVO: Envío cobrado al cliente */}
+                {calcActual.envioCobradoTotal > 0 && (
+                  <div className="bk-row">
+                    <span className="bk-label">Envío cobrado al cliente</span>
+                    <span className="bk-value bk-value-pos">+{formatARS(calcActual.envioCobradoTotal)}</span>
+                    <span className="bk-detail">recibís de ML</span>
+                  </div>
+                )}
+                {/* 🔥 NUEVO: Costo Flex (oculto pero real) */}
+                {calcActual.costoFlexTotal > 0 && (
+                  <div className="bk-row bk-row-hidden">
+                    <span className="bk-label">Costo Flex (estimado)</span>
+                    <span className="bk-value">−{formatARS(calcActual.costoFlexTotal)}</span>
+                    <span className="bk-detail">{calcActual.flexCount} × ~$4.040</span>
+                  </div>
+                )}
                 <div className="bk-row">
                   <span className="bk-label">Publicidad</span>
                   <span className="bk-value">−{formatARS(calcActual.publicidad)}</span>
@@ -568,6 +584,14 @@ export default function RentabilidadView({
           grid-template-columns: 1fr auto 90px;
           align-items: baseline;
           gap: 16px;
+        }
+        .bk-row-hidden {
+          color: #fbbf24;
+        }
+        .bk-row-hidden .bk-label,
+        .bk-row-hidden .bk-value {
+          color: #fbbf24;
+          font-style: italic;
         }
         .bk-row-iva {
           grid-template-columns: 1fr auto;

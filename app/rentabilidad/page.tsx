@@ -70,6 +70,8 @@ type OrderRow = {
   imp_total: number | null
   imp_iibb_total: number | null
   bonificacion_envio: number | null
+  envio_cobrado_cliente: number | null   // 🔥 NUEVO
+  costo_flex_estimado: number | null     // 🔥 NUEVO
   fiscal_v2: boolean | null
 }
 
@@ -94,6 +96,8 @@ export type Calculo = {
   cargosML: number
   retenciones: number
   bonificacionEnvio: number
+  envioCobradoTotal: number      // 🔥 NUEVO
+  costoFlexTotal: number          // 🔥 NUEVO
   publicidad: number
   gastosVarios: number
   ivaDebito: number
@@ -151,6 +155,10 @@ function calcularRentabilidad(
   const retenciones = paid.reduce((s, o) => s + Number(o.imp_total ?? 0), 0)
   const bonificacionEnvio = paid.reduce((s, o) => s + Number(o.bonificacion_envio ?? o.discounts ?? 0), 0)
 
+  // 🔥 NUEVOS: sumas del envío cobrado y costo Flex
+  const envioCobradoTotal = paid.reduce((s, o) => s + Number(o.envio_cobrado_cliente ?? 0), 0)
+  const costoFlexTotal = paid.reduce((s, o) => s + Number(o.costo_flex_estimado ?? 0), 0)
+
   let ingresosNetos = 0
   let ivaDebito = 0
   let costoMerca = 0
@@ -197,7 +205,8 @@ function calcularRentabilidad(
   }
 
   const ivaAPagar = ivaDebito - ivaCredito
-  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio - publicidadAmount - gastosVariosAmount
+  // 🔥 Ganancia operativa: incluye envío cobrado (+) y costo Flex (−)
+  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio + envioCobradoTotal - costoFlexTotal - publicidadAmount - gastosVariosAmount
   const ganancia = gananciaOperativa - ivaAPagar
   const margenOperativo = ingresosNetos > 0 ? (gananciaOperativa / ingresosNetos) * 100 : 0
   const margen = ingresosNetos > 0 ? (ganancia / ingresosNetos) * 100 : 0
@@ -232,6 +241,7 @@ function calcularRentabilidad(
   return {
     facturacion, ingresosNetos,
     costoMerca, cargosML, retenciones, bonificacionEnvio,
+    envioCobradoTotal, costoFlexTotal,
     publicidad: publicidadAmount, gastosVarios: gastosVariosAmount,
     ivaDebito, ivaCredito, ivaAPagar,
     gananciaOperativa, ganancia, margen, margenOperativo,
@@ -251,7 +261,7 @@ async function fetchPeriodData(supabase: any, desdeISO: string, hastaISO: string
   while (true) {
     const { data, error } = await supabase
       .from('orders')
-      .select('order_id, total_amount, marketplace_fee, shipping_cost, discounts, shipping_logistic_type, date_created, status, cargos_total, imp_total, imp_iibb_total, bonificacion_envio, fiscal_v2')
+      .select('order_id, total_amount, marketplace_fee, shipping_cost, discounts, shipping_logistic_type, date_created, status, cargos_total, imp_total, imp_iibb_total, bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, fiscal_v2')
       .gte('date_created', desdeISO)
       .lt('date_created', hastaISO)
       .range(from, from + PAGE - 1)
@@ -403,10 +413,8 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     fetchAllManualComponents(supabase),
   ])
 
-  // Combinar items de ML + items manuales
   const allItems = [...itemsML, ...itemsManuales]
 
-  // Construir mapas
   const itemsBySku = new Map<string, ItemRow>()
   const itemIdToSeller = new Map<string, string | null>()
   const allItemCosts: ItemCostInfo[] = []
