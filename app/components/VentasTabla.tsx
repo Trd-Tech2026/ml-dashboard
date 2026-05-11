@@ -351,6 +351,34 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   <span>− Costo merca (sin IVA)</span>
                                   <span className="vt-fin-value">−{formatARS(fiscal.costoMerca)}</span>
                                 </div>
+                                {/* Impacto neto ML = cargos + retenciones - bonif */}
+                                {(() => {
+                                  const impactoNeto = fiscal.cargosML + fiscal.retenciones - fiscal.bonificacionEnvio
+                                  return impactoNeto !== 0 ? (
+                                    <>
+                                      <div className="vt-fiscal-row vt-fin-deduct vt-fin-impacto-ml">
+                                        <span>− Impacto neto ML</span>
+                                        <span className="vt-fin-value">−{formatARS(impactoNeto)}</span>
+                                      </div>
+                                      <div className="vt-fiscal-row vt-fiscal-sub">
+                                        <span>· Cargos ML</span>
+                                        <span>−{formatARS(fiscal.cargosML)}</span>
+                                      </div>
+                                      {fiscal.bonificacionEnvio > 0 && (
+                                        <div className="vt-fiscal-row vt-fiscal-sub vt-fiscal-sub-bonus">
+                                          <span>· + Bonif. envío</span>
+                                          <span>+{formatARS(fiscal.bonificacionEnvio)}</span>
+                                        </div>
+                                      )}
+                                      {fiscal.retenciones > 0 && (
+                                        <div className="vt-fiscal-row vt-fiscal-sub">
+                                          <span>· Retenciones</span>
+                                          <span>−{formatARS(fiscal.retenciones)}</span>
+                                        </div>
+                                      )}
+                                    </>
+                                  ) : null
+                                })()}
                                 {fiscal.costoFlexEstimado > 0 && (
                                   <div className="vt-fiscal-row vt-fin-deduct">
                                     <span>− Costo Flex</span>
@@ -766,6 +794,13 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         }
         .vt-fiscal-row.vt-fin-oculto-item {
           color: #fb923c;
+        }
+        .vt-fiscal-row.vt-fin-impacto-ml {
+          color: var(--text-secondary);
+          font-style: italic;
+        }
+        .vt-fiscal-sub-bonus {
+          color: #3ee5e0 !important;
         }
         .vt-fiscal-sub {
           padding: 2px 0 2px 12px;
