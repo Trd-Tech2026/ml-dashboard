@@ -24,10 +24,10 @@ export type FiscalBreakdown = {
   impCreditosDebitosEnvio: number
   impIIBB: number
   bonificacionEnvio: number
-  envioCobradoCliente: number   // 🔥 NUEVO
-  costoFlexEstimado: number     // 🔥 NUEVO
-  recibidoML: number             // 🔥 NUEVO: lo que ML transfiere literalmente
-  recibidoNeto: number           // 🔥 NUEVO: recibidoML - costoFlexEstimado
+  envioCobradoCliente: number
+  costoFlexEstimado: number
+  recibidoML: number
+  recibidoNeto: number
   gananciaOperativa: number
   ganancia: number
   margen: number | null
@@ -131,9 +131,19 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
               const tieneVarios = (o.items?.length ?? 0) > 1
               const fiscal = o.fiscal
               const margen = fiscal?.margen ?? null
-              // Si hay fiscal, usar el calculado; si no, usar net_received de BD
               const recibidoML = fiscal?.recibidoML ?? Number(o.net_received ?? 0)
               const recibidoNeto = fiscal?.recibidoNeto ?? Number(o.net_received ?? 0)
+
+              // Lo que ML muestra en su panel = total cobrado - cargos ML - retenciones visibles (IIBB + créd/déb)
+              const totalSegunML = fiscal
+                ? o.total_amount - fiscal.cargosML - fiscal.impIIBB - fiscal.impCreditosDebitos
+                : recibidoML
+
+              // Hay gastos ocultos si hay bonificación, créd/déb envío o envío cobrado al cliente
+              const hayGastosOcultos = fiscal
+                ? (fiscal.bonificacionEnvio > 0 || fiscal.impCreditosDebitosEnvio > 0 || fiscal.envioCobradoCliente > 0)
+                : false
+
               return (
                 <>
                   <tr
@@ -197,19 +207,21 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                           {/* DESGLOSE FISCAL COMPLETO */}
                           {fiscal && recibidoML > 0 && (
                             <div className="vt-fiscal-grid">
-                              {/* Operativo */}
+
+                              {/* ── OPERATIVO ── */}
                               <div className="vt-fiscal-block">
                                 <div className="vt-fiscal-block-title">OPERATIVO</div>
+
+                                {/* ── Subsección: Lo que muestra ML ── */}
+                                <div className="vt-fiscal-subsection-label">
+                                  <span className="vt-subsection-icon">📋</span> Lo que muestra ML
+                                </div>
+
                                 <div className="vt-fiscal-row">
                                   <span>Total cobrado al cliente</span>
                                   <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
                                 </div>
-                                {fiscal.envioCobradoCliente > 0 && (
-                                  <div className="vt-fiscal-row vt-fin-bonus">
-                                    <span>+ Envío cobrado al cliente</span>
-                                    <span className="vt-fin-value">+{formatARS(fiscal.envioCobradoCliente)}</span>
-                                  </div>
-                                )}
+
                                 <div className="vt-fiscal-row vt-fin-deduct">
                                   <span>− Cargos ML</span>
                                   <span className="vt-fin-value">−{formatARS(fiscal.cargosML)}</span>
@@ -232,11 +244,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                     <span>−{formatARS(fiscal.cargosFinanciacion)}</span>
                                   </div>
                                 )}
-                                {fiscal.retenciones > 0 && (
+
+                                {(fiscal.impIIBB > 0 || fiscal.impCreditosDebitos > 0) && (
                                   <>
                                     <div className="vt-fiscal-row vt-fin-deduct">
                                       <span>− Retenciones</span>
-                                      <span className="vt-fin-value">−{formatARS(fiscal.retenciones)}</span>
+                                      <span className="vt-fin-value">−{formatARS(fiscal.impIIBB + fiscal.impCreditosDebitos)}</span>
                                     </div>
                                     {fiscal.impIIBB > 0 && (
                                       <div className="vt-fiscal-row vt-fiscal-sub">
@@ -250,24 +263,50 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                         <span>−{formatARS(fiscal.impCreditosDebitos)}</span>
                                       </div>
                                     )}
+                                  </>
+                                )}
+
+                                {/* Subtotal ML visible */}
+                                <div className="vt-fiscal-row vt-fin-subtotal-ml">
+                                  <span>= Total según ML</span>
+                                  <span className="vt-fin-value">{formatARS(totalSegunML)}</span>
+                                </div>
+
+                                {/* ── Subsección: Gastos ocultos ── */}
+                                {hayGastosOcultos && (
+                                  <>
+                                    <div className="vt-fiscal-subsection-label vt-fiscal-subsection-oculto">
+                                      <span className="vt-subsection-icon">🔍</span> Gastos ocultos (ML no muestra)
+                                    </div>
+
+                                    {fiscal.envioCobradoCliente > 0 && (
+                                      <div className="vt-fiscal-row vt-fin-bonus">
+                                        <span>+ Envío cobrado al cliente</span>
+                                        <span className="vt-fin-value">+{formatARS(fiscal.envioCobradoCliente)}</span>
+                                      </div>
+                                    )}
+                                    {fiscal.bonificacionEnvio > 0 && (
+                                      <div className="vt-fiscal-row vt-fin-bonus">
+                                        <span>+ Bonificación envío ML</span>
+                                        <span className="vt-fin-value">+{formatARS(fiscal.bonificacionEnvio)}</span>
+                                      </div>
+                                    )}
                                     {fiscal.impCreditosDebitosEnvio > 0 && (
-                                      <div className="vt-fiscal-row vt-fiscal-sub">
-                                        <span>· Créd/déb envío</span>
-                                        <span>−{formatARS(fiscal.impCreditosDebitosEnvio)}</span>
+                                      <div className="vt-fiscal-row vt-fin-deduct vt-fin-oculto-item">
+                                        <span>− Créd/déb envío</span>
+                                        <span className="vt-fin-value">−{formatARS(fiscal.impCreditosDebitosEnvio)}</span>
                                       </div>
                                     )}
                                   </>
                                 )}
-                                {fiscal.bonificacionEnvio > 0 && (
-                                  <div className="vt-fiscal-row vt-fin-bonus">
-                                    <span>+ Bonificación envío</span>
-                                    <span className="vt-fin-value">+{formatARS(fiscal.bonificacionEnvio)}</span>
-                                  </div>
-                                )}
+
+                                {/* Recibido de ML */}
                                 <div className="vt-fiscal-row vt-fin-total">
                                   <span>= Recibido (de ML)</span>
                                   <span className="vt-fin-value">{formatARS(fiscal.recibidoML)}</span>
                                 </div>
+
+                                {/* Costo Flex y Recibido NETO */}
                                 {fiscal.costoFlexEstimado > 0 && (
                                   <>
                                     <div className="vt-fiscal-row vt-fin-deduct vt-fin-oculto">
@@ -373,6 +412,15 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           const margen = fiscal?.margen ?? null
           const recibidoML = fiscal?.recibidoML ?? Number(o.net_received ?? 0)
           const recibidoNeto = fiscal?.recibidoNeto ?? Number(o.net_received ?? 0)
+
+          const totalSegunML = fiscal
+            ? o.total_amount - fiscal.cargosML - fiscal.impIIBB - fiscal.impCreditosDebitos
+            : recibidoML
+
+          const hayGastosOcultos = fiscal
+            ? (fiscal.bonificacionEnvio > 0 || fiscal.impCreditosDebitosEnvio > 0 || fiscal.envioCobradoCliente > 0)
+            : false
+
           return (
             <div key={o.order_id} className={`vt-card ${isOpen ? 'vt-card-open' : ''}`}>
               <div className="vt-card-clickable" onClick={() => toggle(o.order_id)}>
@@ -420,36 +468,62 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                       </div>
                     </div>
                   ))}
+
                   {fiscal && recibidoML > 0 && (
                     <>
                       <div className="vt-fiscal-block">
                         <div className="vt-fiscal-block-title">OPERATIVO</div>
+
+                        {/* Lo que muestra ML - mobile */}
+                        <div className="vt-fiscal-subsection-label">
+                          <span className="vt-subsection-icon">📋</span> Lo que muestra ML
+                        </div>
                         <div className="vt-fiscal-row">
                           <span>Total cobrado</span>
                           <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
                         </div>
-                        {fiscal.envioCobradoCliente > 0 && (
-                          <div className="vt-fiscal-row vt-fin-bonus">
-                            <span>+ Envío cobrado</span>
-                            <span className="vt-fin-value">+{formatARS(fiscal.envioCobradoCliente)}</span>
-                          </div>
-                        )}
                         <div className="vt-fiscal-row vt-fin-deduct">
                           <span>− Cargos ML</span>
                           <span className="vt-fin-value">−{formatARS(fiscal.cargosML)}</span>
                         </div>
-                        {fiscal.retenciones > 0 && (
+                        {(fiscal.impIIBB > 0 || fiscal.impCreditosDebitos > 0) && (
                           <div className="vt-fiscal-row vt-fin-deduct">
                             <span>− Retenciones</span>
-                            <span className="vt-fin-value">−{formatARS(fiscal.retenciones)}</span>
+                            <span className="vt-fin-value">−{formatARS(fiscal.impIIBB + fiscal.impCreditosDebitos)}</span>
                           </div>
                         )}
-                        {fiscal.bonificacionEnvio > 0 && (
-                          <div className="vt-fiscal-row vt-fin-bonus">
-                            <span>+ Bonif. envío</span>
-                            <span className="vt-fin-value">+{formatARS(fiscal.bonificacionEnvio)}</span>
-                          </div>
+                        <div className="vt-fiscal-row vt-fin-subtotal-ml">
+                          <span>= Total según ML</span>
+                          <span className="vt-fin-value">{formatARS(totalSegunML)}</span>
+                        </div>
+
+                        {/* Gastos ocultos - mobile */}
+                        {hayGastosOcultos && (
+                          <>
+                            <div className="vt-fiscal-subsection-label vt-fiscal-subsection-oculto">
+                              <span className="vt-subsection-icon">🔍</span> Gastos ocultos
+                            </div>
+                            {fiscal.envioCobradoCliente > 0 && (
+                              <div className="vt-fiscal-row vt-fin-bonus">
+                                <span>+ Envío cobrado</span>
+                                <span className="vt-fin-value">+{formatARS(fiscal.envioCobradoCliente)}</span>
+                              </div>
+                            )}
+                            {fiscal.bonificacionEnvio > 0 && (
+                              <div className="vt-fiscal-row vt-fin-bonus">
+                                <span>+ Bonif. envío ML</span>
+                                <span className="vt-fin-value">+{formatARS(fiscal.bonificacionEnvio)}</span>
+                              </div>
+                            )}
+                            {fiscal.impCreditosDebitosEnvio > 0 && (
+                              <div className="vt-fiscal-row vt-fin-deduct vt-fin-oculto-item">
+                                <span>− Créd/déb envío</span>
+                                <span className="vt-fin-value">−{formatARS(fiscal.impCreditosDebitosEnvio)}</span>
+                              </div>
+                            )}
+                          </>
                         )}
+
                         <div className="vt-fiscal-row vt-fin-total">
                           <span>= Recibido (ML)</span>
                           <span className="vt-fin-value">{formatARS(fiscal.recibidoML)}</span>
@@ -690,6 +764,9 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           color: #fbbf24;
           font-style: italic;
         }
+        .vt-fiscal-row.vt-fin-oculto-item {
+          color: #fb923c;
+        }
         .vt-fiscal-sub {
           padding: 2px 0 2px 12px;
           font-size: 11px;
@@ -702,6 +779,50 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-size: 13px;
           font-weight: 500;
         }
+
+        /* Subsección labels */
+        .vt-fiscal-subsection-label {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.6px;
+          text-transform: uppercase;
+          color: rgba(148, 232, 230, 0.7);
+          margin: 10px 0 5px;
+          padding: 4px 6px;
+          background: rgba(62, 229, 224, 0.05);
+          border-left: 2px solid rgba(62, 229, 224, 0.3);
+          border-radius: 0 4px 4px 0;
+        }
+        .vt-fiscal-subsection-label:first-of-type {
+          margin-top: 2px;
+        }
+        .vt-fiscal-subsection-oculto {
+          color: rgba(251, 191, 36, 0.8);
+          background: rgba(251, 191, 36, 0.05);
+          border-left-color: rgba(251, 191, 36, 0.4);
+        }
+        .vt-subsection-icon {
+          font-size: 11px;
+        }
+
+        /* Subtotal ML visible */
+        .vt-fin-subtotal-ml {
+          border-top: 1px dashed rgba(62, 229, 224, 0.2);
+          margin-top: 4px;
+          padding-top: 6px;
+          font-weight: 600;
+          color: rgba(148, 232, 230, 0.7);
+          font-size: 12px;
+          font-style: italic;
+        }
+        .vt-fin-subtotal-ml .vt-fin-value {
+          font-size: 12px;
+          color: rgba(148, 232, 230, 0.7);
+        }
+
         .vt-fin-total {
           border-top: 1px solid rgba(62, 229, 224, 0.15);
           margin-top: 4px;
