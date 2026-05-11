@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import {
+  tgNuevaVenta,
+  tgCancelacion,
+  tgStockCritico,
+  type DailyTotals,
+} from '../../lib/telegram'
 
 export const maxDuration = 60
 
-// 🔥 Costo Flex promedio ponderado (calculado de SOLDATTI semana 20-25 abril)
-// CABA $2900 + 1er $3700 + 2do $4300 + 3er $6600 + Camp/Zara $7300
-// Mañana se reemplaza por lógica por zona (tabla flex_shipping_costs)
 const COSTO_FLEX_PROMEDIO = 4040
+
+const TZ = 'America/Argentina/Buenos_Aires'
 
 type TokenRow = {
   ml_user_id: string
@@ -18,6 +23,20 @@ type TokenRow = {
 function toMLDate(input: string | Date): string {
   const d = typeof input === 'string' ? new Date(input) : input
   return d.toISOString().replace('Z', '-00:00')
+}
+
+function hoyAR(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date())
+}
+
+function ayerAR(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d)
 }
 
 async function refreshToken(supabase: SupabaseClient, tokenRow: TokenRow): Promise<string | null> {
@@ -80,7 +99,6 @@ async function fetchShippingData(shippingId: string | number, token: string) {
           .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
 
-    // 🔥 Lo que el cliente pagó por envío - ML te transfiere ese dinero
     const envioCobradoCliente = Number(data?.receiver?.cost ?? 0)
 
     return {
@@ -97,11 +115,86 @@ async function fetchShipmentInfo(shippingId: string | number, token: string) {
     const res = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
       headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.status !== 200) return { logistic_type: null as string | null }
+    if (res.status !== 200) return { logistic_type: null as string | null, receiver_address: null as string | null }
     const data = await res.json()
-    return { logistic_type: (data?.logistic_type ?? null) as string | null }
+
+    // Armar dirección legible
+    const addr = data?.receiver_address
+    let receiver_address: string | null = null
+    if (addr) {
+      const parts = [
+        addr.street_name && addr.street_number ? `${addr.street_name} ${addr.street_number}` : addr.street_name,
+        addr.city?.name,
+        addr.state?.name,
+      ].filter(Boolean)
+      receiver_address = parts.join(', ') || null
+    }
+
+    return {
+      logistic_type: (data?.logistic_type ?? null) as string | null,
+      receiver_address,
+    }
   } catch {
-    return { logistic_type: null as string | null }
+    return { logistic_type: null as string | null, receiver_address: null as string | null }
+  }
+}
+
+// 🔥 NUEVO: obtener thumbnail del item de ML
+async function fetchItemThumbnail(itemId: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.mercadolibre.com/items/${itemId}?attributes=thumbnail`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.status !== 200) return null
+    const data = await res.json()
+    // Convertir thumbnail a https y versión más grande
+    const thumb: string = data?.thumbnail ?? ''
+    return thumb ? thumb.replace('http://', 'https://').replace('-I.jpg', '-O.jpg') : null
+  } catch {
+    return null
+  }
+}
+
+// 🔥 NUEVO: obtener totales del día para el resumen de la notificación
+async function fetchDailyTotals(supabase: SupabaseClient): Promise<DailyTotals> {
+  const hoy = hoyAR()
+  const ayer = ayerAR()
+
+  const desdeHoy = new Date(`${hoy}T00:00:00-03:00`).toISOString()
+  const hastaHoy = new Date(`${hoy}T23:59:59-03:00`).toISOString()
+  const desdeAyer = new Date(`${ayer}T00:00:00-03:00`).toISOString()
+  const hastaAyer = new Date(`${ayer}T23:59:59-03:00`).toISOString()
+
+  const [{ data: dataHoy }, { data: dataAyer }] = await Promise.all([
+    supabase.from('orders').select('total_amount').eq('status', 'paid')
+      .gte('date_created', desdeHoy).lte('date_created', hastaHoy),
+    supabase.from('orders').select('total_amount').eq('status', 'paid')
+      .gte('date_created', desdeAyer).lte('date_created', hastaAyer),
+  ])
+
+  const totalHoy = (dataHoy ?? []).reduce((s: number, o: any) => s + Number(o.total_amount ?? 0), 0)
+  const ventasHoy = (dataHoy ?? []).length
+  const totalAyer = (dataAyer ?? []).reduce((s: number, o: any) => s + Number(o.total_amount ?? 0), 0)
+  const ventasAyer = (dataAyer ?? []).length
+
+  return { totalHoy, ventasHoy, totalAyer, ventasAyer }
+}
+
+// 🔥 NUEVO: verificar stock crítico tras la venta
+async function checkStockCritico(supabase: SupabaseClient, sellerSkus: string[]): Promise<void> {
+  if (sellerSkus.length === 0) return
+  try {
+    const { data } = await supabase
+      .from('items')
+      .select('seller_sku, title, available_quantity')
+      .in('seller_sku', sellerSkus)
+      .lte('available_quantity', 2)
+      .gt('available_quantity', 0)
+    for (const item of (data ?? []) as any[]) {
+      await tgStockCritico(item.seller_sku, item.title ?? item.seller_sku, item.available_quantity)
+    }
+  } catch (e) {
+    console.error('checkStockCritico error:', e)
   }
 }
 
@@ -273,6 +366,19 @@ export async function GET() {
   let yaRefresque = false
   let modoSync = ''
 
+  // 🔥 Acumular notificaciones para enviar al final
+  const nuevasPagadas: Array<{
+    order: any
+    net_received: number
+    logistic_type: string | null
+    receiver_address: string | null
+    item_id: string
+    item_title: string
+    item_qty: number
+  }> = []
+  const nuevasCanceladas: Array<{ order: any; item_title: string; total: number }> = []
+  const skusVendidos: string[] = []
+
   while (pagina < MAX_PAGES) {
     pagina++
     const { url, modo } = buildUrl(offset)
@@ -306,6 +412,17 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
+    // 🔥 Verificar cuáles son órdenes nuevas (no estaban en DB)
+    const orderIdsLote = results.map((o: any) => o.id)
+    const { data: existentes } = await supabase
+      .from('orders')
+      .select('order_id, status')
+      .in('order_id', orderIdsLote)
+
+    const existentesMap = new Map<string, string>(
+      (existentes ?? []).map((e: any) => [String(e.order_id), e.status])
+    )
+
     const ordersConFinanzas = await Promise.all(results.map(async (order: any) => {
       const total = Number(order.total_amount ?? 0)
 
@@ -318,6 +435,8 @@ export async function GET() {
       let bonificacion = 0
       let envioCobradoCliente = 0
       let shippingLogisticType: string | null = null
+      let receiverAddress: string | null = null
+
       if (order.shipping?.id) {
         const [ship, info] = await Promise.all([
           fetchShippingData(order.shipping.id, token),
@@ -326,17 +445,50 @@ export async function GET() {
         bonificacion = ship.bonificacionReceiver
         envioCobradoCliente = ship.envioCobradoCliente
         shippingLogisticType = info.logistic_type
+        receiverAddress = info.receiver_address
       }
 
       const fiscal = analizarFiscal(validMp, bonificacion)
-
-      // 🔥 Costo Flex estimado: solo si es self_service
       const costoFlexEstimado = shippingLogisticType === 'self_service' ? COSTO_FLEX_PROMEDIO : 0
 
-      // 🔥 Net received corregido: incluye envío cobrado, resta costo Flex
       const net_received = validMp.length > 0
         ? total + envioCobradoCliente - fiscal.cargos_total - fiscal.imp_total + bonificacion - costoFlexEstimado
         : 0
+
+      // 🔥 Detectar si es orden nueva o cambió a cancelada
+      const eraStatus = existentesMap.get(String(order.id))
+      const esNueva = !eraStatus
+      const nuevaCancelacion = order.status === 'cancelled' && eraStatus && eraStatus !== 'cancelled'
+
+      if (order.status === 'paid' && esNueva) {
+        const primerItem = order.order_items?.[0]
+        const itemId = primerItem?.item?.id ?? ''
+        const itemTitle = primerItem?.item?.title ?? 'Producto'
+        const itemQty = primerItem?.quantity ?? 1
+
+        nuevasPagadas.push({
+          order,
+          net_received,
+          logistic_type: shippingLogisticType,
+          receiver_address: receiverAddress,
+          item_id: itemId,
+          item_title: itemTitle,
+          item_qty: itemQty,
+        })
+
+        // Guardar SKU para check de stock crítico
+        const sellerSku = primerItem?.item?.seller_sku ?? null
+        if (sellerSku) skusVendidos.push(sellerSku)
+      }
+
+      if (nuevaCancelacion) {
+        const primerItem = order.order_items?.[0]
+        nuevasCanceladas.push({
+          order,
+          item_title: primerItem?.item?.title ?? 'Producto',
+          total: Number(order.total_amount ?? 0),
+        })
+      }
 
       return {
         order,
@@ -417,6 +569,38 @@ export async function GET() {
     offset += LIMIT
   }
 
+  // 🔥 Enviar notificaciones Telegram después del sync
+  if (!huboError && nuevasPagadas.length > 0) {
+    const daily = await fetchDailyTotals(supabase)
+
+    for (const venta of nuevasPagadas) {
+      const thumbnail = venta.item_id
+        ? await fetchItemThumbnail(venta.item_id, token)
+        : null
+
+      await tgNuevaVenta(
+        venta.order,
+        venta.net_received,
+        venta.logistic_type,
+        venta.receiver_address,
+        venta.item_title,
+        venta.item_qty,
+        thumbnail,
+        daily,
+        null, // margen: requiere costo, se puede agregar después
+      )
+    }
+  }
+
+  for (const cancelacion of nuevasCanceladas) {
+    await tgCancelacion(cancelacion.order, cancelacion.item_title, cancelacion.total)
+  }
+
+  // 🔥 Check stock crítico para SKUs vendidos hoy
+  if (skusVendidos.length > 0) {
+    await checkStockCritico(supabase, [...new Set(skusVendidos)])
+  }
+
   if (!huboError) {
     await supabase
       .from('sync_state')
@@ -431,6 +615,7 @@ export async function GET() {
     mensaje: `${sincronizadas} ordenes sincronizadas (${modoSync})`,
     total_disponible: totalDisponible,
     paginas_procesadas: pagina,
-    refresh_aplicado: yaRefresque
+    refresh_aplicado: yaRefresque,
+    notificaciones_enviadas: nuevasPagadas.length + nuevasCanceladas.length,
   })
 }
