@@ -1,3 +1,4 @@
+// v2 - IIBB block
 'use client'
 
 import { useState } from 'react'
@@ -156,38 +157,25 @@ export default function RentabilidadView({
             {periodos.map(p => {
               const activo = period === p.value
               const baseStyle: React.CSSProperties = {
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: '10px 22px',
-                borderRadius: '10px',
-                fontSize: '13px',
-                fontWeight: 600,
-                textDecoration: 'none',
-                letterSpacing: '0.3px',
-                transition: 'all 0.18s ease',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                padding: '10px 22px', borderRadius: '10px', fontSize: '13px', fontWeight: 600,
+                textDecoration: 'none', letterSpacing: '0.3px', transition: 'all 0.18s ease',
                 border: '1px solid rgba(62, 229, 224, 0.4)',
               }
               const styleActivo: React.CSSProperties = {
                 ...baseStyle,
                 background: 'linear-gradient(135deg, #1ca0c4 0%, #3ee5e0 100%)',
-                color: '#0a121c',
-                borderColor: 'rgba(62, 229, 224, 0.7)',
+                color: '#0a121c', borderColor: 'rgba(62, 229, 224, 0.7)',
                 boxShadow: '0 4px 18px rgba(62, 229, 224, 0.35)',
               }
               const styleInactivo: React.CSSProperties = {
                 ...baseStyle,
                 background: 'linear-gradient(135deg, #0d4d6e 0%, #1ca0c4 100%)',
-                color: '#ffffff',
-                opacity: 0.55,
+                color: '#ffffff', opacity: 0.55,
                 boxShadow: '0 2px 10px rgba(28, 160, 196, 0.15)',
               }
               return (
-                <Link
-                  key={p.value}
-                  href={`/rentabilidad?period=${p.value}`}
-                  style={activo ? styleActivo : styleInactivo}
-                >
+                <Link key={p.value} href={`/rentabilidad?period=${p.value}`} style={activo ? styleActivo : styleInactivo}>
                   {p.label}
                 </Link>
               )
@@ -206,11 +194,10 @@ export default function RentabilidadView({
             </div>
           )}
 
-          {/* HERO TRDTECH cyan palpitante */}
+          {/* HERO */}
           <div className={`hero-trd ${calcActual.ganancia >= 0 ? 'hero-pos' : 'hero-neg'}`}>
             <div className="hero-orb orb-1" />
             <div className="hero-orb orb-2" />
-
             <div className="hero-row">
               <div className="hero-left">
                 <div className="hero-label">
@@ -223,27 +210,23 @@ export default function RentabilidadView({
                   )}
                 </div>
                 <div className="hero-amount">{formatARSFullSigned(calcActual.ganancia)}</div>
-                <div className="hero-sub">después de IVA, comisiones, retenciones, costo Flex</div>
-                <div className="hero-cambio">
-                  {renderCambio(cambioGanancia, labelComparacion)}
-                </div>
+                <div className="hero-sub">después de IVA, IIBB, comisiones, retenciones, costo Flex</div>
+                <div className="hero-cambio">{renderCambio(cambioGanancia, labelComparacion)}</div>
               </div>
-
               <div className="hero-right">
                 <div className="hero-label-r">MARGEN REAL</div>
                 <div className="hero-margen">
                   {calcActual.ingresosNetos > 0 ? `${calcActual.margen.toFixed(1)}%` : '—'}
                 </div>
                 <div className="hero-tag">{margenLabel}</div>
-                <div className="hero-cambio">
-                  {renderCambio(cambioMargen, labelComparacion)}
-                </div>
+                <div className="hero-cambio">{renderCambio(cambioMargen, labelComparacion)}</div>
               </div>
             </div>
           </div>
 
-          {/* BREAKDOWN: 2 cuadros separados abajo */}
+          {/* BREAKDOWN */}
           <div className="breakdown-row">
+            {/* OPERATIVO */}
             <div className="bk-card">
               <div className="bk-card-title">OPERATIVO (sin IVA)</div>
               <div className="bk-list">
@@ -278,7 +261,6 @@ export default function RentabilidadView({
                   <span className="bk-value bk-value-pos">+{formatARS(calcActual.bonificacionEnvio)}</span>
                   <span className="bk-detail">{calcActual.flexCount} ventas Flex</span>
                 </div>
-                {/* 🔥 NUEVO: Envío cobrado al cliente */}
                 {calcActual.envioCobradoTotal > 0 && (
                   <div className="bk-row">
                     <span className="bk-label">Envío cobrado al cliente</span>
@@ -286,7 +268,6 @@ export default function RentabilidadView({
                     <span className="bk-detail">recibís de ML</span>
                   </div>
                 )}
-                {/* 🔥 NUEVO: Costo Flex (oculto pero real) */}
                 {calcActual.costoFlexTotal > 0 && (
                   <div className="bk-row bk-row-hidden">
                     <span className="bk-label">Costo Flex (estimado)</span>
@@ -322,33 +303,63 @@ export default function RentabilidadView({
               </div>
             </div>
 
-            <div className="bk-card">
-              <div className="bk-card-title">IVA (Resp. Inscripto)</div>
-              <div className="bk-list">
-                <div className="bk-row bk-row-iva">
-                  <span className="bk-label">IVA débito</span>
-                  <span className="bk-value">{formatARS(calcActual.ivaDebito)}</span>
+            {/* IVA + IIBB apilados */}
+            <div className="bk-col-right">
+
+              {/* IVA */}
+              <div className="bk-card">
+                <div className="bk-card-title">IVA (Resp. Inscripto)</div>
+                <div className="bk-list">
+                  <div className="bk-row bk-row-iva">
+                    <span className="bk-label">IVA débito</span>
+                    <span className="bk-value">{formatARS(calcActual.ivaDebito)}</span>
+                  </div>
+                  <div className="bk-row bk-row-iva">
+                    <span className="bk-label">IVA crédito</span>
+                    <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCredito)}</span>
+                  </div>
+                  <div className="bk-row bk-row-total bk-row-iva">
+                    <span className="bk-label-total">
+                      = {calcActual.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}
+                    </span>
+                    <span className={`bk-value-total ${calcActual.ivaAPagar > 0 ? 'bk-value-neg' : 'bk-value-pos'}`}>
+                      {formatARSSigned(-calcActual.ivaAPagar)}
+                    </span>
+                  </div>
                 </div>
-                <div className="bk-row bk-row-iva">
-                  <span className="bk-label">IVA crédito</span>
-                  <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCredito)}</span>
-                </div>
-                <div className="bk-row bk-row-total bk-row-iva">
-                  <span className="bk-label-total">
-                    = {calcActual.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}
-                  </span>
-                  <span className={`bk-value-total ${calcActual.ivaAPagar > 0 ? 'bk-value-neg' : 'bk-value-pos'}`}>
-                    {formatARSSigned(calcActual.ivaAPagar)}
-                  </span>
+                <div className="bk-card-hint">
+                  21% cobrado al cliente menos IVA pagado en compras.
                 </div>
               </div>
-              <div className="bk-card-hint">
-                21% sobre el precio (cobrado al cliente) menos lo que pagaste de IVA al comprar la mercadería.
+
+              {/* 🔥 IIBB */}
+              <div className="bk-card bk-card-iibb">
+                <div className="bk-card-title">IIBB (Convenio Multilateral)</div>
+                <div className="bk-list">
+                  <div className="bk-row bk-row-iva">
+                    <span className="bk-label">Obligación ({calcActual.iibbTasa}% facturación)</span>
+                    <span className="bk-value bk-value-neg">−{formatARS(calcActual.iibbObligacion)}</span>
+                  </div>
+                  <div className="bk-row bk-row-iva">
+                    <span className="bk-label">Ya retenido por ML</span>
+                    <span className="bk-value bk-value-pos">+{formatARS(calcActual.iibbRetenido)}</span>
+                  </div>
+                  <div className="bk-row bk-row-total bk-row-iva">
+                    <span className="bk-label-total">= IIBB pendiente DJ</span>
+                    <span className={`bk-value-total ${calcActual.iibbPendiente > 0 ? 'bk-value-neg' : 'bk-value-pos'}`}>
+                      {formatARSSigned(-calcActual.iibbPendiente)}
+                    </span>
+                  </div>
+                </div>
+                <div className="bk-card-hint">
+                  Lo retenido por ML es un pago a cuenta. El resto lo declarás en la DJ mensual de IIBB.
+                </div>
               </div>
+
             </div>
           </div>
 
-          {/* MINI CARDS abajo */}
+          {/* MINI CARDS */}
           <div className="mini-cards">
             <div className="mini-card">
               <div className="mini-label">VENTAS</div>
@@ -397,7 +408,7 @@ export default function RentabilidadView({
           period={period}
           labelPeriodo={labelPeriodo}
           labelComparacion={labelComparacion}
-          iibbPct={0}
+          iibbPct={calcActual.iibbTasa}
         />
       )}
 
@@ -446,113 +457,39 @@ export default function RentabilidadView({
         .warn-link:hover { text-decoration: underline; }
 
         @keyframes palpitar-trd {
-          0%, 100% {
-            border-color: rgba(62, 229, 224, 0.25);
-            box-shadow: 0 0 0 0 rgba(62, 229, 224, 0.15), 0 0 60px rgba(28, 160, 196, 0.06);
-          }
-          50% {
-            border-color: rgba(62, 229, 224, 0.55);
-            box-shadow: 0 0 0 4px rgba(62, 229, 224, 0.05), 0 0 80px rgba(28, 160, 196, 0.18);
-          }
+          0%, 100% { border-color: rgba(62, 229, 224, 0.25); box-shadow: 0 0 0 0 rgba(62, 229, 224, 0.15), 0 0 60px rgba(28, 160, 196, 0.06); }
+          50% { border-color: rgba(62, 229, 224, 0.55); box-shadow: 0 0 0 4px rgba(62, 229, 224, 0.05), 0 0 80px rgba(28, 160, 196, 0.18); }
         }
         .hero-trd {
           position: relative;
           background: linear-gradient(135deg, rgba(13, 77, 110, 0.2) 0%, rgba(28, 160, 196, 0.06) 100%);
-          border: 1px solid rgba(62, 229, 224, 0.3);
-          border-radius: 18px;
-          padding: 32px 36px;
-          margin-bottom: 16px;
-          overflow: hidden;
+          border: 1px solid rgba(62, 229, 224, 0.3); border-radius: 18px;
+          padding: 32px 36px; margin-bottom: 16px; overflow: hidden;
           animation: palpitar-trd 2.8s ease-in-out infinite;
         }
         .hero-neg {
           background: linear-gradient(135deg, rgba(127, 29, 29, 0.18) 0%, rgba(220, 38, 38, 0.06) 100%);
-          animation: none;
-          border-color: rgba(239, 68, 68, 0.35);
+          animation: none; border-color: rgba(239, 68, 68, 0.35);
         }
         .hero-orb { position: absolute; border-radius: 50%; filter: blur(60px); pointer-events: none; }
-        .orb-1 {
-          background: rgba(28, 160, 196, 0.18);
-          width: 220px; height: 220px;
-          top: -50px; left: 30%;
-        }
-        .orb-2 {
-          background: rgba(62, 229, 224, 0.12);
-          width: 180px; height: 180px;
-          bottom: -40px; right: 18%;
-        }
+        .orb-1 { background: rgba(28, 160, 196, 0.18); width: 220px; height: 220px; top: -50px; left: 30%; }
+        .orb-2 { background: rgba(62, 229, 224, 0.12); width: 180px; height: 180px; bottom: -40px; right: 18%; }
         .hero-neg .orb-1 { background: rgba(239, 68, 68, 0.25); }
         .hero-neg .orb-2 { background: rgba(220, 38, 38, 0.18); }
-
-        .hero-row {
-          position: relative;
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          gap: 24px;
-          flex-wrap: wrap;
-        }
+        .hero-row { position: relative; display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; flex-wrap: wrap; }
         .hero-left { flex: 1; min-width: 260px; }
-        .hero-label {
-          display: flex; align-items: center; gap: 10px;
-          font-size: 11px; letter-spacing: 1.5px; color: var(--text-muted);
-          font-weight: 500; margin-bottom: 12px;
-        }
-        .badge-live {
-          display: inline-flex; align-items: center; gap: 5px;
-          background: rgba(239, 68, 68, 0.12); color: #f87171;
-          border: 1px solid rgba(239, 68, 68, 0.3);
-          padding: 3px 9px; border-radius: 12px;
-          font-size: 9px; font-weight: 500; letter-spacing: 0.5px;
-        }
-        .live-dot {
-          width: 6px; height: 6px; background: #f87171;
-          border-radius: 50%; display: inline-block;
-          animation: pulse-dot 2s ease-in-out infinite;
-        }
+        .hero-label { display: flex; align-items: center; gap: 10px; font-size: 11px; letter-spacing: 1.5px; color: var(--text-muted); font-weight: 500; margin-bottom: 12px; }
+        .badge-live { display: inline-flex; align-items: center; gap: 5px; background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); padding: 3px 9px; border-radius: 12px; font-size: 9px; font-weight: 500; letter-spacing: 0.5px; }
+        .live-dot { width: 6px; height: 6px; background: #f87171; border-radius: 50%; display: inline-block; animation: pulse-dot 2s ease-in-out infinite; }
         @keyframes pulse-dot { 50% { opacity: 0.4; } }
-
-        .hero-amount {
-          font-size: 52px;
-          font-weight: 500;
-          line-height: 1;
-          color: #3ee5e0;
-          font-variant-numeric: tabular-nums;
-          letter-spacing: -1.2px;
-          margin-bottom: 8px;
-        }
+        .hero-amount { font-size: 52px; font-weight: 500; line-height: 1; color: #3ee5e0; font-variant-numeric: tabular-nums; letter-spacing: -1.2px; margin-bottom: 8px; }
         .hero-neg .hero-amount { color: #f87171; }
-        .hero-sub {
-          font-size: 12px;
-          color: var(--text-muted);
-          margin-bottom: 6px;
-        }
-        .hero-cambio {
-          margin-top: 8px;
-          font-size: 12px;
-          font-weight: 500;
-        }
-
+        .hero-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+        .hero-cambio { margin-top: 8px; font-size: 12px; font-weight: 500; }
         .hero-right { text-align: right; }
-        .hero-label-r {
-          font-size: 11px; letter-spacing: 1.5px;
-          color: var(--text-muted); font-weight: 500;
-        }
-        .hero-margen {
-          font-size: 38px;
-          font-weight: 500;
-          line-height: 1;
-          color: var(--text-primary);
-          font-variant-numeric: tabular-nums;
-          margin: 8px 0 6px;
-        }
-        .hero-tag {
-          font-size: 11px;
-          color: #3ee5e0;
-          letter-spacing: 1px;
-          font-weight: 500;
-          margin-bottom: 8px;
-        }
+        .hero-label-r { font-size: 11px; letter-spacing: 1.5px; color: var(--text-muted); font-weight: 500; }
+        .hero-margen { font-size: 38px; font-weight: 500; line-height: 1; color: var(--text-primary); font-variant-numeric: tabular-nums; margin: 8px 0 6px; }
+        .hero-tag { font-size: 11px; color: #3ee5e0; letter-spacing: 1px; font-weight: 500; margin-bottom: 8px; }
         .hero-neg .hero-tag { color: #f87171; }
 
         .cambio { font-size: 12px; font-weight: 500; }
@@ -560,128 +497,55 @@ export default function RentabilidadView({
         .cambio-bad { color: var(--danger); }
         .cambio-flat { color: var(--text-muted); }
 
+        /* 🔥 Nuevo layout: Operativo + columna derecha (IVA apilado con IIBB) */
         .breakdown-row {
           display: grid;
           grid-template-columns: 1.6fr 1fr;
           gap: 16px;
           margin-bottom: 16px;
+          align-items: start;
+        }
+        .bk-col-right {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
         }
         .bk-card {
           background: rgba(10, 18, 28, 0.6);
           border: 1px solid rgba(62, 229, 224, 0.12);
-          border-radius: 14px;
-          padding: 18px 22px;
+          border-radius: 14px; padding: 18px 22px;
         }
-        .bk-card-title {
-          font-size: 11px; letter-spacing: 1.2px;
-          color: var(--text-muted); font-weight: 500;
-          margin-bottom: 14px; padding-bottom: 8px;
-          border-bottom: 1px solid rgba(62, 229, 224, 0.08);
+        /* 🔥 IIBB card con acento naranja */
+        .bk-card-iibb {
+          background: rgba(10, 18, 28, 0.6);
+          border-color: rgba(251, 191, 36, 0.2);
         }
+        .bk-card-iibb .bk-card-title { color: #fbbf24; }
+
+        .bk-card-title { font-size: 11px; letter-spacing: 1.2px; color: var(--text-muted); font-weight: 500; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid rgba(62, 229, 224, 0.08); }
         .bk-list { display: flex; flex-direction: column; gap: 9px; }
-        .bk-row {
-          display: grid;
-          grid-template-columns: 1fr auto 90px;
-          align-items: baseline;
-          gap: 16px;
-        }
-        .bk-row-hidden {
-          color: #fbbf24;
-        }
-        .bk-row-hidden .bk-label,
-        .bk-row-hidden .bk-value {
-          color: #fbbf24;
-          font-style: italic;
-        }
-        .bk-row-iva {
-          grid-template-columns: 1fr auto;
-        }
+        .bk-row { display: grid; grid-template-columns: 1fr auto 90px; align-items: baseline; gap: 16px; }
+        .bk-row-hidden { color: #fbbf24; }
+        .bk-row-hidden .bk-label, .bk-row-hidden .bk-value { color: #fbbf24; font-style: italic; }
+        .bk-row-iva { grid-template-columns: 1fr auto; }
         .bk-label { font-size: 13px; color: var(--text-secondary); }
-        .bk-value {
-          font-size: 14px;
-          font-weight: 500;
-          color: #cbd5e1;
-          font-variant-numeric: tabular-nums;
-          text-align: right;
-          white-space: nowrap;
-        }
+        .bk-value { font-size: 14px; font-weight: 500; color: #cbd5e1; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
         .bk-value-pos { color: #3ee5e0; }
         .bk-value-neg { color: #f87171; }
-        .bk-detail {
-          font-size: 10px;
-          color: var(--text-muted);
-          text-align: right;
-        }
-
-        .bk-row-total {
-          margin-top: 4px;
-          padding-top: 11px;
-          border-top: 1px solid rgba(62, 229, 224, 0.12);
-        }
-        .bk-label-total {
-          font-size: 13px;
-          color: var(--text-primary);
-          font-weight: 500;
-        }
-        .bk-value-total {
-          font-size: 17px;
-          font-weight: 500;
-          font-variant-numeric: tabular-nums;
-          text-align: right;
-          white-space: nowrap;
-          color: #cbd5e1;
-        }
-
-        .bk-card-hint {
-          margin-top: 14px;
-          padding-top: 12px;
-          border-top: 1px solid rgba(62, 229, 224, 0.08);
-          font-size: 11px;
-          color: var(--text-muted);
-          line-height: 1.5;
-        }
-
-        .link-btn {
-          background: transparent; border: none; color: #1ca0c4; padding: 0;
-          font-family: inherit; font-size: 10px; cursor: pointer; text-decoration: underline;
-        }
+        .bk-detail { font-size: 10px; color: var(--text-muted); text-align: right; }
+        .bk-row-total { margin-top: 4px; padding-top: 11px; border-top: 1px solid rgba(62, 229, 224, 0.12); }
+        .bk-label-total { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+        .bk-value-total { font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; color: #cbd5e1; }
+        .bk-card-hint { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(62, 229, 224, 0.08); font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+        .link-btn { background: transparent; border: none; color: #1ca0c4; padding: 0; font-family: inherit; font-size: 10px; cursor: pointer; text-decoration: underline; }
         .link-btn:hover { color: #3ee5e0; }
 
-        .mini-cards {
-          display: grid;
-          grid-template-columns: repeat(6, 1fr);
-          gap: 10px;
-        }
-        .mini-card {
-          background: rgba(13, 77, 110, 0.18);
-          border: 1px solid rgba(62, 229, 224, 0.1);
-          border-radius: 10px;
-          padding: 12px 14px;
-        }
-        .mini-label {
-          font-size: 10px;
-          color: var(--text-muted);
-          letter-spacing: 0.6px;
-          font-weight: 500;
-          margin-bottom: 4px;
-        }
-        .mini-value {
-          font-size: 20px;
-          font-weight: 500;
-          color: var(--text-primary);
-          font-variant-numeric: tabular-nums;
-          line-height: 1;
-        }
-        .mini-fraction {
-          font-size: 13px;
-          color: var(--text-muted);
-          font-weight: 400;
-        }
-        .mini-detail {
-          font-size: 11px;
-          color: var(--text-muted);
-          margin-top: 3px;
-        }
+        .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+        .mini-card { background: rgba(13, 77, 110, 0.18); border: 1px solid rgba(62, 229, 224, 0.1); border-radius: 10px; padding: 12px 14px; }
+        .mini-label { font-size: 10px; color: var(--text-muted); letter-spacing: 0.6px; font-weight: 500; margin-bottom: 4px; }
+        .mini-value { font-size: 20px; font-weight: 500; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1; }
+        .mini-fraction { font-size: 13px; color: var(--text-muted); font-weight: 400; }
+        .mini-detail { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
         .mini-roas { color: #3ee5e0; }
         .mini-disabled { opacity: 0.4; }
 
