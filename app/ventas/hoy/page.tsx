@@ -90,10 +90,26 @@ function calcularFiscalOrden(
   const impIIBB = Number(o.imp_iibb_total ?? 0)
   const bonificacionEnvio = Number(o.bonificacion_envio ?? o.discounts ?? 0)
 
-  const ivaAPagar = ivaDebito - ivaCredito
-  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio
-  const ganancia = gananciaOperativa - ivaAPagar
+  // 🔥 NUEVOS CAMPOS
+  const envioCobradoCliente = Number(o.envio_cobrado_cliente ?? 0)
+  const costoFlexEstimado = Number(o.costo_flex_estimado ?? 0)
   const totalBruto = Number(o.total_amount ?? 0)
+
+  // 🔥 Recibido ML: lo que ML te transfiere literalmente
+  const recibidoML = totalBruto + envioCobradoCliente - cargosML - retenciones + bonificacionEnvio
+
+  // 🔥 Recibido neto: lo que realmente queda después de tu costo Flex
+  const recibidoNeto = recibidoML - costoFlexEstimado
+
+  const ivaAPagar = ivaDebito - ivaCredito
+
+  // 🔥 Ganancia operativa: ingresos sin IVA - costo merca - costo Flex
+  // (los cargos ML y retenciones ya están reflejados en el recibido neto)
+  const gananciaOperativa = recibidoNeto - costoMerca - bonificacionEnvio + bonificacionEnvio
+  // Reescribo más claro:
+  const gananciaOperativaReal = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio - costoFlexEstimado
+
+  const ganancia = gananciaOperativaReal - ivaAPagar
   const margen = totalBruto > 0 && unidadesSinCosto === 0 && unidadesConCosto > 0
     ? (ganancia / totalBruto) * 100 : null
 
@@ -103,7 +119,12 @@ function calcularFiscalOrden(
     cargosML, cargosComision, cargosCostoFijo, cargosFinanciacion,
     retenciones, impCreditosDebitos, impCreditosDebitosEnvio, impIIBB,
     bonificacionEnvio,
-    gananciaOperativa, ganancia, margen,
+    envioCobradoCliente,
+    costoFlexEstimado,
+    recibidoML,
+    recibidoNeto,
+    gananciaOperativa: gananciaOperativaReal,
+    ganancia, margen,
     unidadesConCosto, unidadesSinCosto,
     costoCompleto: unidadesSinCosto === 0 && unidadesConCosto > 0,
     fuentesCostos: Array.from(fuentesCostos),
@@ -126,7 +147,7 @@ export default async function Hoy() {
       shipping_logistic_type,
       cargos_total, cargos_comision, cargos_costo_fijo, cargos_financiacion,
       imp_total, imp_iibb_total, imp_creditos_debitos, imp_creditos_debitos_envio,
-      bonificacion_envio, fiscal_v2,
+      bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, fiscal_v2,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', inicioDiaISO)

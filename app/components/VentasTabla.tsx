@@ -24,6 +24,10 @@ export type FiscalBreakdown = {
   impCreditosDebitosEnvio: number
   impIIBB: number
   bonificacionEnvio: number
+  envioCobradoCliente: number   // 🔥 NUEVO
+  costoFlexEstimado: number     // 🔥 NUEVO
+  recibidoML: number             // 🔥 NUEVO: lo que ML transfiere literalmente
+  recibidoNeto: number           // 🔥 NUEVO: recibidoML - costoFlexEstimado
   gananciaOperativa: number
   ganancia: number
   margen: number | null
@@ -117,7 +121,8 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
               <th>Producto</th>
               <th>Estado</th>
               <th style={{ textAlign: 'right' }}>Margen</th>
-              <th style={{ textAlign: 'right' }}>Recibido</th>
+              <th style={{ textAlign: 'right' }}>Recibido ML</th>
+              <th style={{ textAlign: 'right' }}>Recibido neto</th>
             </tr>
           </thead>
           <tbody>
@@ -126,6 +131,9 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
               const tieneVarios = (o.items?.length ?? 0) > 1
               const fiscal = o.fiscal
               const margen = fiscal?.margen ?? null
+              // Si hay fiscal, usar el calculado; si no, usar net_received de BD
+              const recibidoML = fiscal?.recibidoML ?? Number(o.net_received ?? 0)
+              const recibidoNeto = fiscal?.recibidoNeto ?? Number(o.net_received ?? 0)
               return (
                 <>
                   <tr
@@ -153,11 +161,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                         <span className="vt-margen-falta" title="Falta cargar el costo del producto">— falta costo</span>
                       )}
                     </td>
-                    <td className="vt-total">{formatARS(Number(o.net_received ?? o.total_amount ?? 0))}</td>
+                    <td className="vt-recibido-ml">{formatARS(recibidoML)}</td>
+                    <td className="vt-total">{formatARS(recibidoNeto)}</td>
                   </tr>
                   {isOpen && (
                     <tr key={`${o.order_id}-detail`} className="vt-detail-row">
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <div className="vt-detail">
                           <div className="vt-detail-title">Productos</div>
                           <table className="vt-subtabla">
@@ -186,7 +195,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                           </table>
 
                           {/* DESGLOSE FISCAL COMPLETO */}
-                          {fiscal && o.net_received > 0 && (
+                          {fiscal && recibidoML > 0 && (
                             <div className="vt-fiscal-grid">
                               {/* Operativo */}
                               <div className="vt-fiscal-block">
@@ -195,6 +204,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   <span>Total cobrado al cliente</span>
                                   <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
                                 </div>
+                                {fiscal.envioCobradoCliente > 0 && (
+                                  <div className="vt-fiscal-row vt-fin-bonus">
+                                    <span>+ Envío cobrado al cliente</span>
+                                    <span className="vt-fin-value">+{formatARS(fiscal.envioCobradoCliente)}</span>
+                                  </div>
+                                )}
                                 <div className="vt-fiscal-row vt-fin-deduct">
                                   <span>− Cargos ML</span>
                                   <span className="vt-fin-value">−{formatARS(fiscal.cargosML)}</span>
@@ -213,7 +228,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                 )}
                                 {fiscal.cargosFinanciacion > 0 && (
                                   <div className="vt-fiscal-row vt-fiscal-sub">
-                                    <span>· Recargo cuotas</span>
+                                    <span>· Costo cuotas</span>
                                     <span>−{formatARS(fiscal.cargosFinanciacion)}</span>
                                   </div>
                                 )}
@@ -251,8 +266,20 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                 )}
                                 <div className="vt-fiscal-row vt-fin-total">
                                   <span>= Recibido (de ML)</span>
-                                  <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                                  <span className="vt-fin-value">{formatARS(fiscal.recibidoML)}</span>
                                 </div>
+                                {fiscal.costoFlexEstimado > 0 && (
+                                  <>
+                                    <div className="vt-fiscal-row vt-fin-deduct vt-fin-oculto">
+                                      <span>− Costo Flex (estimado)</span>
+                                      <span className="vt-fin-value">−{formatARS(fiscal.costoFlexEstimado)}</span>
+                                    </div>
+                                    <div className="vt-fiscal-row vt-fin-total vt-fin-total-real">
+                                      <span>= Recibido NETO</span>
+                                      <span className="vt-fin-value">{formatARS(fiscal.recibidoNeto)}</span>
+                                    </div>
+                                  </>
+                                )}
                               </div>
 
                               {/* IVA */}
@@ -285,6 +312,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   <span>− Costo merca (sin IVA)</span>
                                   <span className="vt-fin-value">−{formatARS(fiscal.costoMerca)}</span>
                                 </div>
+                                {fiscal.costoFlexEstimado > 0 && (
+                                  <div className="vt-fiscal-row vt-fin-deduct">
+                                    <span>− Costo Flex</span>
+                                    <span className="vt-fin-value">−{formatARS(fiscal.costoFlexEstimado)}</span>
+                                  </div>
+                                )}
                                 <div className="vt-fiscal-row">
                                   <span>= Ganancia operativa</span>
                                   <span className={`vt-fin-value ${fiscal.gananciaOperativa >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
@@ -317,7 +350,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                               </div>
                             </div>
                           )}
-                          {(!fiscal || o.net_received === 0) && o.status === 'paid' && (
+                          {(!fiscal || recibidoML === 0) && o.status === 'paid' && (
                             <div className="vt-no-data">Datos financieros no disponibles para esta orden.</div>
                           )}
                         </div>
@@ -338,6 +371,8 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           const tieneVarios = (o.items?.length ?? 0) > 1
           const fiscal = o.fiscal
           const margen = fiscal?.margen ?? null
+          const recibidoML = fiscal?.recibidoML ?? Number(o.net_received ?? 0)
+          const recibidoNeto = fiscal?.recibidoNeto ?? Number(o.net_received ?? 0)
           return (
             <div key={o.order_id} className={`vt-card ${isOpen ? 'vt-card-open' : ''}`}>
               <div className="vt-card-clickable" onClick={() => toggle(o.order_id)}>
@@ -358,7 +393,16 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                   <span className="vt-card-margen" style={{ color: colorMargen(margen) }}>
                     {margen != null ? `${margen.toFixed(1)}%` : '—'}
                   </span>
-                  <span className="vt-card-total">{formatARS(Number(o.net_received ?? o.total_amount ?? 0))}</span>
+                </div>
+                <div className="vt-card-recibidos">
+                  <div className="vt-card-recibido-item">
+                    <span className="vt-card-recibido-label">Recibido ML</span>
+                    <span className="vt-card-recibido-ml">{formatARS(recibidoML)}</span>
+                  </div>
+                  <div className="vt-card-recibido-item">
+                    <span className="vt-card-recibido-label">Recibido neto</span>
+                    <span className="vt-card-recibido-neto">{formatARS(recibidoNeto)}</span>
+                  </div>
                 </div>
               </div>
               {isOpen && (
@@ -376,7 +420,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                       </div>
                     </div>
                   ))}
-                  {fiscal && o.net_received > 0 && (
+                  {fiscal && recibidoML > 0 && (
                     <>
                       <div className="vt-fiscal-block">
                         <div className="vt-fiscal-block-title">OPERATIVO</div>
@@ -384,6 +428,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                           <span>Total cobrado</span>
                           <span className="vt-fin-value">{formatARS(o.total_amount)}</span>
                         </div>
+                        {fiscal.envioCobradoCliente > 0 && (
+                          <div className="vt-fiscal-row vt-fin-bonus">
+                            <span>+ Envío cobrado</span>
+                            <span className="vt-fin-value">+{formatARS(fiscal.envioCobradoCliente)}</span>
+                          </div>
+                        )}
                         <div className="vt-fiscal-row vt-fin-deduct">
                           <span>− Cargos ML</span>
                           <span className="vt-fin-value">−{formatARS(fiscal.cargosML)}</span>
@@ -401,9 +451,21 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                           </div>
                         )}
                         <div className="vt-fiscal-row vt-fin-total">
-                          <span>= Recibido</span>
-                          <span className="vt-fin-value">{formatARS(o.net_received)}</span>
+                          <span>= Recibido (ML)</span>
+                          <span className="vt-fin-value">{formatARS(fiscal.recibidoML)}</span>
                         </div>
+                        {fiscal.costoFlexEstimado > 0 && (
+                          <>
+                            <div className="vt-fiscal-row vt-fin-deduct vt-fin-oculto">
+                              <span>− Costo Flex (est.)</span>
+                              <span className="vt-fin-value">−{formatARS(fiscal.costoFlexEstimado)}</span>
+                            </div>
+                            <div className="vt-fiscal-row vt-fin-total vt-fin-total-real">
+                              <span>= Recibido NETO</span>
+                              <span className="vt-fin-value">{formatARS(fiscal.recibidoNeto)}</span>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       <div className="vt-fiscal-block">
@@ -489,13 +551,9 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         }
         .vt-arrow-open { transform: rotate(90deg); color: #3ee5e0; }
 
-        .vt-order-id {
-          font-size: 13px;
-          color: #ffffff;
-          font-weight: 500;
-        }
+        .vt-order-id { font-size: 13px; color: #ffffff; font-weight: 500; }
         .vt-producto {
-          max-width: 320px;
+          max-width: 280px;
           font-size: 13px;
           color: #ffffff;
           font-weight: 500;
@@ -529,6 +587,13 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-weight: 500;
           color: var(--text-muted);
           font-style: italic;
+        }
+        .vt-recibido-ml {
+          text-align: right;
+          font-weight: 500;
+          color: var(--text-muted);
+          font-variant-numeric: tabular-nums;
+          font-size: 13px;
         }
         .vt-total {
           text-align: right;
@@ -583,11 +648,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           color: var(--text-secondary);
           border-top: 1px solid rgba(62, 229, 224, 0.06);
         }
-        .vt-sku {
-          font-family: monospace;
-          font-size: 11px;
-          color: var(--text-muted);
-        }
+        .vt-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); }
 
         /* DESGLOSE FISCAL */
         .vt-fiscal-grid {
@@ -625,6 +686,10 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         }
         .vt-fiscal-row.vt-fin-deduct { color: var(--text-secondary); }
         .vt-fiscal-row.vt-fin-bonus { color: #3ee5e0; }
+        .vt-fiscal-row.vt-fin-oculto {
+          color: #fbbf24;
+          font-style: italic;
+        }
         .vt-fiscal-sub {
           padding: 2px 0 2px 12px;
           font-size: 11px;
@@ -646,6 +711,13 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-size: 13px;
         }
         .vt-fin-total .vt-fin-value { font-size: 14px; }
+        .vt-fin-total-real {
+          border-top: 2px solid #3ee5e0;
+          margin-top: 6px;
+          padding-top: 8px;
+          color: #3ee5e0;
+        }
+        .vt-fin-total-real .vt-fin-value { color: #3ee5e0; font-size: 15px; font-weight: 700; }
         .vt-fiscal-final {
           margin-top: 6px;
           padding-top: 10px;
@@ -683,6 +755,10 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
 
         /* CARDS MOBILE */
         .vt-cards-mobile { display: none; }
+
+        @media (max-width: 1400px) {
+          .vt-producto { max-width: 200px; }
+        }
 
         @media (max-width: 1300px) {
           .vt-fiscal-grid { grid-template-columns: 1fr 1fr; }
@@ -731,7 +807,38 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           }
           .vt-card-orderid { font-size: 11px; color: var(--text-muted); }
           .vt-card-margen { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
-          .vt-card-total { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+          .vt-card-recibidos {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(62, 229, 224, 0.08);
+          }
+          .vt-card-recibido-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+          }
+          .vt-card-recibido-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+          }
+          .vt-card-recibido-ml {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+          }
+          .vt-card-recibido-neto {
+            font-size: 14px;
+            color: #3ee5e0;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+          }
           .vt-card-detail {
             padding: 12px 14px 14px;
             background: rgba(10, 18, 28, 0.3);
