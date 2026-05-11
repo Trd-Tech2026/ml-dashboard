@@ -121,10 +121,20 @@ function calcularFiscalOrden(
   const impIIBB = Number(o.imp_iibb_total ?? 0)
   const bonificacionEnvio = Number(o.bonificacion_envio ?? o.discounts ?? 0)
 
-  const ivaAPagar = ivaDebito - ivaCredito
-  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio
-  const ganancia = gananciaOperativa - ivaAPagar
+  // 🔥 NUEVOS CAMPOS
+  const envioCobradoCliente = Number(o.envio_cobrado_cliente ?? 0)
+  const costoFlexEstimado = Number(o.costo_flex_estimado ?? 0)
   const totalBruto = Number(o.total_amount ?? 0)
+
+  // 🔥 Recibido ML: lo que ML te transfiere literalmente
+  const recibidoML = totalBruto + envioCobradoCliente - cargosML - retenciones + bonificacionEnvio
+
+  // 🔥 Recibido neto: lo que queda después del costo Flex
+  const recibidoNeto = recibidoML - costoFlexEstimado
+
+  const ivaAPagar = ivaDebito - ivaCredito
+  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio - costoFlexEstimado
+  const ganancia = gananciaOperativa - ivaAPagar
   const margen = totalBruto > 0 && unidadesSinCosto === 0 && unidadesConCosto > 0
     ? (ganancia / totalBruto) * 100 : null
 
@@ -134,6 +144,10 @@ function calcularFiscalOrden(
     cargosML, cargosComision, cargosCostoFijo, cargosFinanciacion,
     retenciones, impCreditosDebitos, impCreditosDebitosEnvio, impIIBB,
     bonificacionEnvio,
+    envioCobradoCliente,
+    costoFlexEstimado,
+    recibidoML,
+    recibidoNeto,
     gananciaOperativa, ganancia, margen,
     unidadesConCosto, unidadesSinCosto,
     costoCompleto: unidadesSinCosto === 0 && unidadesConCosto > 0,
@@ -180,7 +194,6 @@ export default async function Historicas({ searchParams }: Props) {
     labelComparacion = `vs ${dias} días previos`
   }
 
-  // Cargar items ML + items manuales + componentes EN PARALELO con KPIs
   const [todasOrdenes, prevOrdenes, allItemsRes, manualItemsRes, manualCompsRes] = await Promise.all([
     fetchKpisRango(supabase, desdeISO, hastaISOActual),
     fetchKpisRango(supabase, desdePreviaISO, hastaPreviaISO),
@@ -189,7 +202,6 @@ export default async function Historicas({ searchParams }: Props) {
     supabase.from('product_components').select('parent_sku, component_sku, quantity'),
   ])
 
-  // Construir mapas para el resolver
   const allItemsML = (allItemsRes.data ?? []) as any[]
   const itemsManuales = ((manualItemsRes.data ?? []) as any[]).map((m: any) => ({
     item_id: `MANUAL-${m.seller_sku}`,
@@ -252,7 +264,6 @@ export default async function Historicas({ searchParams }: Props) {
   const prevFacturacion = prevPagadas.reduce((sum, o) => sum + Number(o.total_amount ?? 0), 0)
   const prevTicket = prevPagadas.length > 0 ? prevFacturacion / prevPagadas.length : 0
 
-  // Cargar las últimas 100 ventas con sus items completos
   let recientesQuery: any = supabase
     .from('orders')
     .select(`
@@ -260,7 +271,7 @@ export default async function Historicas({ searchParams }: Props) {
       marketplace_fee, shipping_cost, discounts, net_received, shipping_logistic_type,
       cargos_total, cargos_comision, cargos_costo_fijo, cargos_financiacion,
       imp_total, imp_iibb_total, imp_creditos_debitos, imp_creditos_debitos_envio,
-      bonificacion_envio, fiscal_v2,
+      bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, fiscal_v2,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', desdeISO)
@@ -297,7 +308,7 @@ export default async function Historicas({ searchParams }: Props) {
       marketplace_fee, shipping_cost, discounts, net_received, shipping_logistic_type,
       cargos_total, cargos_comision, cargos_costo_fijo, cargos_financiacion,
       imp_total, imp_iibb_total, imp_creditos_debitos, imp_creditos_debitos_envio,
-      bonificacion_envio, fiscal_v2,
+      bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, fiscal_v2,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', desdeISO)

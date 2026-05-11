@@ -13,7 +13,6 @@ export const dynamic = 'force-dynamic'
 const TZ = 'America/Argentina/Buenos_Aires'
 
 type OrderEnriched = OrderWithItems & { shipping_logistic_type: string | null }
-
 type Cambio = { pct: number; trend: 'up' | 'down' | 'flat' } | null
 
 function rangoDiaArgentina(diasAtras: number): { desdeISO: string; hastaISO: string } {
@@ -99,10 +98,20 @@ function calcularFiscalOrden(
   const impIIBB = Number(o.imp_iibb_total ?? 0)
   const bonificacionEnvio = Number(o.bonificacion_envio ?? o.discounts ?? 0)
 
-  const ivaAPagar = ivaDebito - ivaCredito
-  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio
-  const ganancia = gananciaOperativa - ivaAPagar
+  // 🔥 NUEVOS CAMPOS
+  const envioCobradoCliente = Number(o.envio_cobrado_cliente ?? 0)
+  const costoFlexEstimado = Number(o.costo_flex_estimado ?? 0)
   const totalBruto = Number(o.total_amount ?? 0)
+
+  // 🔥 Recibido ML: lo que ML te transfiere literalmente
+  const recibidoML = totalBruto + envioCobradoCliente - cargosML - retenciones + bonificacionEnvio
+
+  // 🔥 Recibido neto: lo que queda después del costo Flex
+  const recibidoNeto = recibidoML - costoFlexEstimado
+
+  const ivaAPagar = ivaDebito - ivaCredito
+  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio - costoFlexEstimado
+  const ganancia = gananciaOperativa - ivaAPagar
   const margen = totalBruto > 0 && unidadesSinCosto === 0 && unidadesConCosto > 0
     ? (ganancia / totalBruto) * 100 : null
 
@@ -112,6 +121,10 @@ function calcularFiscalOrden(
     cargosML, cargosComision, cargosCostoFijo, cargosFinanciacion,
     retenciones, impCreditosDebitos, impCreditosDebitosEnvio, impIIBB,
     bonificacionEnvio,
+    envioCobradoCliente,
+    costoFlexEstimado,
+    recibidoML,
+    recibidoNeto,
     gananciaOperativa, ganancia, margen,
     unidadesConCosto, unidadesSinCosto,
     costoCompleto: unidadesSinCosto === 0 && unidadesConCosto > 0,
@@ -135,14 +148,13 @@ export default async function Ayer() {
       shipping_logistic_type,
       cargos_total, cargos_comision, cargos_costo_fijo, cargos_financiacion,
       imp_total, imp_iibb_total, imp_creditos_debitos, imp_creditos_debitos_envio,
-      bonificacion_envio, fiscal_v2,
+      bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, fiscal_v2,
       order_items ( item_id, title, quantity, unit_price )
     `)
     .gte('date_created', desdeISO)
     .lt('date_created', hastaISO)
     .order('date_created', { ascending: false })
 
-  // Cargar items ML + items manuales + componentes
   const [allItemsRes, manualItemsRes, manualCompsRes] = await Promise.all([
     supabase.from('items').select('item_id, seller_sku, cost, iva_rate'),
     supabase.from('manual_items').select('seller_sku, cost, iva_rate'),
