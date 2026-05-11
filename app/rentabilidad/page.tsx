@@ -70,8 +70,8 @@ type OrderRow = {
   imp_total: number | null
   imp_iibb_total: number | null
   bonificacion_envio: number | null
-  envio_cobrado_cliente: number | null   // 🔥 NUEVO
-  costo_flex_estimado: number | null     // 🔥 NUEVO
+  envio_cobrado_cliente: number | null
+  costo_flex_estimado: number | null
   fiscal_v2: boolean | null
 }
 
@@ -96,13 +96,18 @@ export type Calculo = {
   cargosML: number
   retenciones: number
   bonificacionEnvio: number
-  envioCobradoTotal: number      // 🔥 NUEVO
-  costoFlexTotal: number          // 🔥 NUEVO
+  envioCobradoTotal: number
+  costoFlexTotal: number
   publicidad: number
   gastosVarios: number
   ivaDebito: number
   ivaCredito: number
   ivaAPagar: number
+  // 🔥 IIBB
+  iibbTasa: number
+  iibbObligacion: number
+  iibbRetenido: number
+  iibbPendiente: number
   gananciaOperativa: number
   ganancia: number
   margen: number
@@ -145,7 +150,8 @@ function calcularRentabilidad(
   publicidadAmount: number,
   gastosVariosAmount: number,
   desde: Date,
-  hasta: Date
+  hasta: Date,
+  iibbTasa: number  // 🔥 NUEVO: tasa IIBB desde tax_config (ej: 5)
 ): Calculo {
   const paid = orders.filter(o => o.status === 'paid')
   const paidIds = new Set(paid.map(o => String(o.order_id)))
@@ -154,10 +160,15 @@ function calcularRentabilidad(
   const cargosML = paid.reduce((s, o) => s + Number(o.cargos_total ?? o.marketplace_fee ?? 0), 0)
   const retenciones = paid.reduce((s, o) => s + Number(o.imp_total ?? 0), 0)
   const bonificacionEnvio = paid.reduce((s, o) => s + Number(o.bonificacion_envio ?? o.discounts ?? 0), 0)
-
-  // 🔥 NUEVOS: sumas del envío cobrado y costo Flex
   const envioCobradoTotal = paid.reduce((s, o) => s + Number(o.envio_cobrado_cliente ?? 0), 0)
   const costoFlexTotal = paid.reduce((s, o) => s + Number(o.costo_flex_estimado ?? 0), 0)
+
+  // 🔥 IIBB: lo que ML ya retuvo como agente de recaudación
+  const iibbRetenido = paid.reduce((s, o) => s + Number(o.imp_iibb_total ?? 0), 0)
+  // Obligación total = facturación bruta × tasa (ej: 5%)
+  const iibbObligacion = facturacion * (iibbTasa / 100)
+  // Lo que falta pagar = obligación − ya retenido (mínimo 0)
+  const iibbPendiente = Math.max(0, iibbObligacion - iibbRetenido)
 
   let ingresosNetos = 0
   let ivaDebito = 0
@@ -205,9 +216,15 @@ function calcularRentabilidad(
   }
 
   const ivaAPagar = ivaDebito - ivaCredito
-  // 🔥 Ganancia operativa: incluye envío cobrado (+) y costo Flex (−)
-  const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio + envioCobradoTotal - costoFlexTotal - publicidadAmount - gastosVariosAmount
-  const ganancia = gananciaOperativa - ivaAPagar
+
+  const gananciaOperativa =
+    ingresosNetos - costoMerca - cargosML - retenciones +
+    bonificacionEnvio + envioCobradoTotal - costoFlexTotal -
+    publicidadAmount - gastosVariosAmount
+
+  // 🔥 Ganancia neta ahora descuenta IVA + IIBB pendiente
+  const ganancia = gananciaOperativa - ivaAPagar - iibbPendiente
+
   const margenOperativo = ingresosNetos > 0 ? (gananciaOperativa / ingresosNetos) * 100 : 0
   const margen = ingresosNetos > 0 ? (ganancia / ingresosNetos) * 100 : 0
 
@@ -244,6 +261,7 @@ function calcularRentabilidad(
     envioCobradoTotal, costoFlexTotal,
     publicidad: publicidadAmount, gastosVarios: gastosVariosAmount,
     ivaDebito, ivaCredito, ivaAPagar,
+    iibbTasa, iibbObligacion, iibbRetenido, iibbPendiente,
     gananciaOperativa, ganancia, margen, margenOperativo,
     ventas, unidades, unidadesConCosto, unidadesSinCosto, ticketPromedio,
     envioCount, flexCount,
@@ -313,7 +331,7 @@ async function fetchAllManualItems(supabase: any): Promise<ItemRow[]> {
       .from('manual_items')
       .select('seller_sku, cost, iva_rate')
       .range(from, from + PAGE - 1)
-    if (error || !data || data.length === 0) break
+      if (error || !data || data.length === 0) break
     for (const m of data as any[]) {
       items.push({
         item_id: `MANUAL-${m.seller_sku}`,
@@ -371,6 +389,17 @@ async function fetchQuickExpensesTotal(supabase: any, desde: Date, hasta: Date):
   return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
 }
 
+// 🔥 NUEVO: fetchear tasa IIBB desde tax_config
+async function fetchIIBBTasa(supabase: any): Promise<number> {
+  const { data } = await supabase
+    .from('tax_config')
+    .select('percentage')
+    .eq('type', 'iibb')
+    .eq('active', true)
+    .maybeSingle()
+  return data ? Number(data.percentage) : 5
+}
+
 export default async function RentabilidadPage({ searchParams }: Props) {
   const params = await searchParams
   const period = params.period ?? 'hoy'
@@ -401,7 +430,13 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     labelPeriodo = 'hoy'; labelComparacion = 'vs ayer'
   }
 
-  const [actual, previo, publicidadActual, publicidadPrev, gastosActual, gastosPrev, itemsML, itemsManuales, manualComps] = await Promise.all([
+  const [
+    actual, previo,
+    publicidadActual, publicidadPrev,
+    gastosActual, gastosPrev,
+    itemsML, itemsManuales, manualComps,
+    iibbTasa,  // 🔥 NUEVO
+  ] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
     fetchAdsTotal(supabase, desdeActual, hastaActual),
@@ -411,6 +446,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     fetchAllItems(supabase),
     fetchAllManualItems(supabase),
     fetchAllManualComponents(supabase),
+    fetchIIBBTasa(supabase),  // 🔥 NUEVO
   ])
 
   const allItems = [...itemsML, ...itemsManuales]
@@ -446,12 +482,14 @@ export default async function RentabilidadPage({ searchParams }: Props) {
   const calcActual = calcularRentabilidad(
     actual.orders, actual.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadActual, gastosActual, desdeActual, hastaActual
+    publicidadActual, gastosActual, desdeActual, hastaActual,
+    iibbTasa  // 🔥
   )
   const calcPrev = calcularRentabilidad(
     previo.orders, previo.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadPrev, gastosPrev, desdePrev, hastaPrev
+    publicidadPrev, gastosPrev, desdePrev, hastaPrev,
+    iibbTasa  // 🔥
   )
 
   return (
