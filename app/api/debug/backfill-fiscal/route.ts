@@ -119,6 +119,7 @@ export async function GET(request: Request) {
   const desde = searchParams.get('from')
   const dryRun = searchParams.get('dry') === 'true'
   const limit = parseInt(searchParams.get('limit') ?? '500', 10)
+  const offset = parseInt(searchParams.get('offset') ?? '0', 10)
   const onlyPending = searchParams.get('only_pending') === 'true'
 
   if (!desde) {
@@ -143,12 +144,13 @@ export async function GET(request: Request) {
   if (!tokenData) return NextResponse.json({ ok: false, error: 'No hay token de ML' }, { status: 401 })
   const token = tokenData.access_token
 
+  // 🔥 Query con offset
   let q = supabase
     .from('orders')
     .select('order_id, total_amount, status, date_created')
     .gte('date_created', desde)
     .order('date_created', { ascending: false })
-    .limit(limit)
+    .range(offset, offset + limit - 1)
 
   if (onlyPending) {
     q = q.or('envio_cobrado_cliente.is.null,envio_cobrado_cliente.eq.0')
@@ -158,7 +160,12 @@ export async function GET(request: Request) {
 
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
   if (!orders || orders.length === 0) {
-    return NextResponse.json({ ok: true, message: 'No hay ordenes para procesar', count: 0 })
+    return NextResponse.json({ 
+      ok: true, 
+      message: 'No hay ordenes para procesar en este offset', 
+      count: 0,
+      offset,
+    })
   }
 
   let procesadas = 0
@@ -260,6 +267,8 @@ export async function GET(request: Request) {
     ok: true,
     dry_run: dryRun,
     only_pending: onlyPending,
+    offset,
+    limit,
     procesadas,
     exitos,
     fallidas,
