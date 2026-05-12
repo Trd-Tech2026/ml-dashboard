@@ -186,8 +186,13 @@ export default function RentabilidadView({
             <div className="warn-banner">
               <span>⚠️</span>
               <div className="warn-text">
-                <strong>{calcActual.unidadesSinCosto}</strong> {calcActual.unidadesSinCosto === 1 ? 'unidad vendida' : 'unidades vendidas'} sin costo configurado.
-                Se asume IVA 21% para esos items, pero el cálculo de IVA crédito y costo merca queda en cero.
+                <strong>{calcActual.unidadesSinCosto}</strong> {calcActual.unidadesSinCosto === 1 ? 'unidad vendida' : 'unidades vendidas'} sin costo configurado
+                {calcActual.itemsSinCosto?.length > 0 && (
+                  <span> · <strong style={{ fontFamily: 'monospace', color: '#fbbf24' }}>
+                    {calcActual.itemsSinCosto.join(', ')}
+                  </strong></span>
+                )}.
+                {' '}Se asume IVA 21% pero IVA crédito y costo merca quedan en cero.
                 {' '}
                 <Link href="/stock/cargador-masivo" className="warn-link">Cargá los costos faltantes</Link>
               </div>

@@ -78,6 +78,7 @@ type OrderRow = {
 type OrderItemRow = {
   order_id: any
   item_id: string
+  title: string
   quantity: number
   unit_price: number
 }
@@ -116,6 +117,7 @@ export type Calculo = {
   unidades: number
   unidadesConCosto: number
   unidadesSinCosto: number
+  itemsSinCosto: string[]
   ticketPromedio: number
   envioCount: number
   flexCount: number
@@ -177,6 +179,7 @@ function calcularRentabilidad(
   let unidades = 0
   let unidadesConCosto = 0
   let unidadesSinCosto = 0
+  const itemsSinCostoSet = new Set<string>()
 
   for (const oi of orderItems) {
     if (!paidIds.has(String(oi.order_id))) continue
@@ -208,6 +211,7 @@ function calcularRentabilidad(
 
     if (costRes.source === 'no-data') {
       unidadesSinCosto += qty
+      itemsSinCostoSet.add(sellerSku ?? oi.item_id)
     } else {
       unidadesConCosto += qty
       costoMerca += costRes.costoSinIva
@@ -263,7 +267,9 @@ function calcularRentabilidad(
     ivaDebito, ivaCredito, ivaAPagar,
     iibbTasa, iibbObligacion, iibbRetenido, iibbPendiente,
     gananciaOperativa, ganancia, margen, margenOperativo,
-    ventas, unidades, unidadesConCosto, unidadesSinCosto, ticketPromedio,
+    ventas, unidades, unidadesConCosto, unidadesSinCosto,
+    itemsSinCosto: Array.from(itemsSinCostoSet),
+    ticketPromedio,
     envioCount, flexCount,
     diasActivos, diasTotales,
     mejorDiaMonto, mejorDiaFecha,
@@ -297,7 +303,7 @@ async function fetchPeriodData(supabase: any, desdeISO: string, hastaISO: string
     const chunk = orderIds.slice(i, i + 500)
     const { data } = await supabase
       .from('order_items')
-      .select('order_id, item_id, quantity, unit_price')
+      .select('order_id, item_id, title, quantity, unit_price')
       .in('order_id', chunk)
     if (data) orderItems.push(...(data as OrderItemRow[]))
   }
