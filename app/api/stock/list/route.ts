@@ -39,6 +39,8 @@ type Group = {
   is_manual: boolean
   maxLastUpdated: string | null
   maxDateCreated: string | null
+  fullStock: number      // 🔥 stock en Full ML
+  depositoStock: number  // 🔥 stock en depósito propio (stock_movements)
 }
 
 const SELECT_FIELDS = 'item_id, title, thumbnail, permalink, available_quantity, sold_quantity, price, currency, status, logistic_type, free_shipping, shipping_tags, is_flex, seller_sku, last_updated, archived, date_created'
@@ -175,9 +177,7 @@ export async function GET(request: Request) {
     const existing = map.get(key)
     if (existing) {
       existing.items.push(item)
-      // Stock: MÁXIMO entre publicaciones (mismo producto físico = mismo stock real)
       existing.totalStock = Math.max(existing.totalStock, item.available_quantity ?? 0)
-      // Ventas: SUMA real entre todas las publicaciones del mismo SKU
       existing.totalSold += item.sold_quantity
       existing.minPrice = Math.min(existing.minPrice, item.price || 0)
       existing.maxPrice = Math.max(existing.maxPrice, item.price || 0)
@@ -188,6 +188,10 @@ export async function GET(request: Request) {
         existing.maxDateCreated = item.date_created
       }
       if (item.is_manual) existing.is_manual = true
+      // 🔥 Full stock: máximo de publicaciones fulfillment
+      if (item.logistic_type === 'fulfillment') {
+        existing.fullStock = Math.max(existing.fullStock, item.available_quantity ?? 0)
+      }
     } else {
       map.set(key, {
         key, sku: item.seller_sku, title: item.title, thumbnail: item.thumbnail,
@@ -197,6 +201,9 @@ export async function GET(request: Request) {
         minPrice: item.price || 0, maxPrice: item.price || 0,
         currency: item.currency, is_manual: !!item.is_manual,
         maxLastUpdated: item.last_updated, maxDateCreated: item.date_created ?? null,
+        // 🔥
+        fullStock: item.logistic_type === 'fulfillment' ? (item.available_quantity ?? 0) : 0,
+        depositoStock: 0,
       })
     }
   }
@@ -209,6 +216,29 @@ export async function GET(request: Request) {
         if (b.status === 'active' && a.status !== 'active') return 1
         return (b.sold_quantity ?? 0) - (a.sold_quantity ?? 0)
       })
+    }
+  }
+
+  // 🔥 Calcular depositoStock desde stock_movements
+  const allSkus = Array.from(map.values())
+    .map(g => g.sku)
+    .filter((s): s is string => !!s)
+
+  if (allSkus.length > 0) {
+    const CHUNK = 500
+    const movMap = new Map<string, number>()
+    for (let i = 0; i < allSkus.length; i += CHUNK) {
+      const chunk = allSkus.slice(i, i + CHUNK)
+      const { data: movements } = await supabase
+        .from('stock_movements')
+        .select('seller_sku, quantity_delta')
+        .in('seller_sku', chunk)
+      for (const m of (movements ?? []) as { seller_sku: string; quantity_delta: number }[]) {
+        movMap.set(m.seller_sku, (movMap.get(m.seller_sku) ?? 0) + (m.quantity_delta ?? 0))
+      }
+    }
+    for (const group of Array.from(map.values())) {
+      if (group.sku) group.depositoStock = movMap.get(group.sku) ?? 0
     }
   }
 
@@ -260,18 +290,15 @@ function sortItems(items: Item[], sort: string): Item[] {
   }
 }
 
-// =============================================================
-// KPIs por SKU ÚNICO (no por publicaciones)
-// =============================================================
 async function computeKpis(supabase: any, includeManual: boolean) {
-  type StockRow = { item_id: string; seller_sku: string | null; available_quantity: number }
+  type StockRow = { item_id: string; seller_sku: string | null; available_quantity: number; logistic_type: string | null }
   const itemsForKpis: StockRow[] = []
   let from = 0
   const PAGE = 1000
   while (true) {
     const { data, error } = await supabase
       .from('items')
-      .select('item_id, seller_sku, available_quantity')
+      .select('item_id, seller_sku, available_quantity, logistic_type')
       .eq('archived', false)
       .range(from, from + PAGE - 1)
     if (error || !data || data.length === 0) break
@@ -280,14 +307,24 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     from += PAGE
   }
 
-  // Agrupar por SKU único (o item_id si no tiene SKU). Stock = máximo entre publicaciones.
+  // Agrupar por SKU único. Stock = máximo entre publicaciones.
   const stockByGroup = new Map<string, number>()
+  const fullByGroup = new Map<string, number>()
+
   for (const item of itemsForKpis) {
     const key = item.seller_sku ? `sku:${item.seller_sku}` : `item:${item.item_id}`
-    const current = stockByGroup.get(key)
     const itemStock = item.available_quantity ?? 0
+
+    // Total stock por grupo
+    const current = stockByGroup.get(key)
     if (current === undefined) stockByGroup.set(key, itemStock)
     else stockByGroup.set(key, Math.max(current, itemStock))
+
+    // Full stock por grupo
+    if (item.logistic_type === 'fulfillment') {
+      const currentFull = fullByGroup.get(key) ?? 0
+      fullByGroup.set(key, Math.max(currentFull, itemStock))
+    }
   }
 
   let uniqueSkus = stockByGroup.size
@@ -299,6 +336,19 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     if (stock === 0) sinStockCount++
     else if (stock < 5) criticoCount++
   }
+
+  // 🔥 Stock Full total
+  const stockFull = Array.from(fullByGroup.values()).reduce((s, v) => s + v, 0)
+
+  // 🔥 Stock Depósito total (desde stock_movements)
+  let stockDeposito = 0
+  try {
+    const { data: movData } = await supabase
+      .from('stock_movements')
+      .select('quantity_delta')
+    stockDeposito = ((movData ?? []) as { quantity_delta: number }[])
+      .reduce((s, m) => s + (m.quantity_delta ?? 0), 0)
+  } catch {}
 
   let manualCount = 0
   let manualStock = 0
@@ -329,6 +379,8 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     stock_total: stockTotal + manualStock,
     archived_count: archivedCount ?? 0,
     manual_count: manualCount,
+    stock_full: stockFull,        // 🔥
+    stock_deposito: stockDeposito, // 🔥
   }
 }
 

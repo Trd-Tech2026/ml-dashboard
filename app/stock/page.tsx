@@ -38,6 +38,8 @@ type Group = {
   maxPrice: number
   currency: string
   is_manual?: boolean
+  fullStock?: number      // 🔥 stock Full ML
+  depositoStock?: number  // 🔥 stock depósito (stock_movements)
 }
 
 type Kpis = {
@@ -47,6 +49,8 @@ type Kpis = {
   stock_total: number
   archived_count: number
   manual_count?: number
+  stock_full?: number      // 🔥
+  stock_deposito?: number  // 🔥
 }
 
 type SyncState = {
@@ -434,7 +438,7 @@ function ProductosView() {
     }
   }
 
-  const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0, archived_count: 0, manual_count: 0 }
+  const kpis = data?.kpis ?? { total: 0, sin_stock: 0, critico: 0, stock_total: 0, archived_count: 0, manual_count: 0, stock_full: 0, stock_deposito: 0 }
   const totalFiltered = data?.totalFiltered ?? 0
   const totalGroups = data?.totalGroups ?? 0
   const groups: Group[] = data?.groups ?? []
@@ -473,7 +477,6 @@ function ProductosView() {
           <button
             className={`btn-edit-costs ${editingCosts ? 'btn-edit-costs-active' : ''}`}
             onClick={() => setEditingCosts(v => !v)}
-            title="Activá la edición inline de costos en la tabla"
           >
             <span>{editingCosts ? '✓' : '💰'}</span>
             <span>{editingCosts ? 'Listo' : 'Modificar costos'}</span>
@@ -490,20 +493,24 @@ function ProductosView() {
           <span className="banner-icon">💡</span>
           <div className="banner-text">
             <strong>Modo edición de costos activo.</strong> Los costos se guardan al apretar Enter o salir del campo.
-            Cambiá el IVA con el dropdown chiquito al lado.
           </div>
           <button className="btn-mini" onClick={() => setEditingCosts(false)}>✓ Salir</button>
         </div>
       )}
 
+      {/* 🔥 KPIs con Depósito y Full separados */}
       <div className="kpis">
         <div className="kpi" style={{ '--kpi-c': 'var(--info)' } as any}>
           <div className="kpi-label">Productos (SKUs únicos)</div>
           <div className="kpi-value">{kpis.total.toLocaleString('es-AR')}</div>
         </div>
         <div className="kpi" style={{ '--kpi-c': 'var(--success)' } as any}>
-          <div className="kpi-label">Stock total</div>
-          <div className="kpi-value">{kpis.stock_total.toLocaleString('es-AR')}</div>
+          <div className="kpi-label">📦 Stock Depósito</div>
+          <div className="kpi-value">{(kpis.stock_deposito ?? 0).toLocaleString('es-AR')}</div>
+        </div>
+        <div className="kpi" style={{ '--kpi-c': 'var(--accent)' } as any}>
+          <div className="kpi-label">🏭 Stock Full</div>
+          <div className="kpi-value">{(kpis.stock_full ?? 0).toLocaleString('es-AR')}</div>
         </div>
         <div className="kpi" style={{ '--kpi-c': 'var(--warning)' } as any}>
           <div className="kpi-label">Stock crítico (&lt;5)</div>
@@ -598,7 +605,8 @@ function ProductosView() {
               <th className="col-arrow"></th>
               <th>Foto</th>
               <th>Título / SKU</th>
-              <th>Stock</th>
+              <th>📦 Depósito</th>
+              <th>🏭 Full</th>
               <th>Vendidos</th>
               <th>Costo</th>
               <th>Precio</th>
@@ -617,6 +625,8 @@ function ProductosView() {
               const isManual = !!rep.is_manual
               const ci = getCostInfo(rep)
               const key = costMapKey(rep)
+              const deposito = group.depositoStock ?? 0
+              const full = group.fullStock ?? 0
 
               return (
                 <>
@@ -631,7 +641,7 @@ function ProductosView() {
                     </td>
                     <td className="col-arrow">
                       {isMulti ? (
-                        <button className="arrow-btn" onClick={() => toggleExpand(group.key)} title={`${group.items.length} publicaciones`}>
+                        <button className="arrow-btn" onClick={() => toggleExpand(group.key)}>
                           <span className={`arrow ${isExpanded ? 'arrow-open' : ''}`}>▶</span>
                         </button>
                       ) : null}
@@ -648,14 +658,24 @@ function ProductosView() {
                       <div className="title-text">
                         {group.title}
                         {isManual && <span className="badge-manual">MANUAL</span>}
-                        {isMulti && <span className="badge-count" title="Tiene varias publicaciones — click ▶ para verlas">{group.items.length} publ.</span>}
+                        {isMulti && <span className="badge-count">{group.items.length} publ.</span>}
                       </div>
                       {group.sku
                         ? <div className="sku">SKU: {group.sku}</div>
                         : <div className="sku-missing">Sin SKU</div>
                       }
                     </td>
-                    <td className="td-stock"><strong>{group.totalStock}</strong></td>
+                    {/* 🔥 Depósito */}
+                    <td className="td-stock">
+                      <strong className={deposito === 0 ? 'stock-dim' : ''}>{deposito}</strong>
+                    </td>
+                    {/* 🔥 Full */}
+                    <td className="td-stock td-full">
+                      {full > 0
+                        ? <strong className="full-qty">{full}</strong>
+                        : <span className="text-dim">—</span>
+                      }
+                    </td>
                     <td className="td-num">{isManual ? '—' : group.totalSold}</td>
                     <CostCell
                       item={rep}
@@ -709,6 +729,7 @@ function ProductosView() {
                   {isMulti && isExpanded && group.items.map((item) => {
                     const ciChild = getCostInfo(item)
                     const keyChild = costMapKey(item)
+                    const isFull = item.logistic_type === 'fulfillment'
                     return (
                       <tr key={item.item_id} className={`child-row ${stockClass(item.available_quantity)} ${selected.has(item.item_id) ? 'fila-selected' : ''}`}>
                         <td className="col-check">
@@ -720,7 +741,17 @@ function ProductosView() {
                           <div className="title-text-child">{item.item_id}</div>
                           <div className="sku">{item.title}</div>
                         </td>
-                        <td className="td-stock"><strong>{item.available_quantity}</strong></td>
+                        {/* 🔥 Child: Depósito = stock si no es Full */}
+                        <td className="td-stock">
+                          <strong>{isFull ? '—' : item.available_quantity}</strong>
+                        </td>
+                        {/* 🔥 Child: Full = stock si es fulfillment */}
+                        <td className="td-stock td-full">
+                          {isFull
+                            ? <strong className="full-qty">{item.available_quantity}</strong>
+                            : <span className="text-dim">—</span>
+                          }
+                        </td>
                         <td className="td-num">{item.sold_quantity}</td>
                         <CostCell
                           item={item}
@@ -755,6 +786,7 @@ function ProductosView() {
         </table>
       </div>
 
+      {/* CARDS MOBILE */}
       <div className="cards-mobile">
         {groups.map((group) => {
           const rep = group.items[0]
@@ -763,6 +795,8 @@ function ProductosView() {
           const isMulti = group.items.length > 1
           const ci = getCostInfo(rep)
           const key = costMapKey(rep)
+          const deposito = group.depositoStock ?? 0
+          const full = group.fullStock ?? 0
           return (
             <div key={group.key} className={`card-item ${stockClass(group.totalStock)} ${isSelected ? 'card-selected' : ''} ${isManual ? 'card-manual' : ''}`}>
               <div className="card-top">
@@ -783,15 +817,15 @@ function ProductosView() {
                 </div>
               </div>
               <div className="card-stats">
-                <div><span className="stat-label">Stock</span> <strong>{group.totalStock}</strong></div>
-                <div><span className="stat-label">Vendidos</span> {isManual ? '—' : group.totalSold}</div>
                 <div>
-                  <span className="stat-label">Precio</span>{' '}
-                  {isManual ? '—' : group.minPrice === group.maxPrice
-                    ? formatearPrecio(group.minPrice, group.currency)
-                    : `${formatearPrecio(group.minPrice, group.currency)}–${formatearPrecio(group.maxPrice, group.currency)}`
-                  }
+                  <span className="stat-label">📦 Depósito</span>
+                  <strong>{deposito}</strong>
                 </div>
+                <div>
+                  <span className="stat-label">🏭 Full</span>
+                  <strong className={full > 0 ? 'full-qty' : ''}>{full > 0 ? full : '—'}</strong>
+                </div>
+                <div><span className="stat-label">Vendidos</span> {isManual ? '—' : group.totalSold}</div>
               </div>
               <div className="card-cost-row">
                 <span className="stat-label">Costo</span>
@@ -862,13 +896,11 @@ function ProductosView() {
         .header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
         .btn-create-manual { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--accent); border: 1px solid var(--border-medium); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-create-manual:hover { background: rgba(62, 229, 224, 0.08); border-color: var(--accent); }
-        .btn-create-manual span:first-child { font-size: 16px; line-height: 1; }
         .btn-edit-costs { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--warning); border: 1px solid rgba(255, 167, 38, 0.4); padding: 11px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s ease; white-space: nowrap; }
         .btn-edit-costs:hover { background: rgba(255, 167, 38, 0.08); border-color: var(--warning); }
-        .btn-edit-costs.btn-edit-costs-active { background: var(--warning); color: var(--bg-base); border-color: var(--warning); box-shadow: 0 4px 14px rgba(255, 167, 38, 0.25); }
-        .btn-edit-costs span:first-child { font-size: 14px; line-height: 1; }
+        .btn-edit-costs.btn-edit-costs-active { background: var(--warning); color: var(--bg-base); border-color: var(--warning); }
         .btn-refresh { display: flex; align-items: center; gap: 8px; background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 11px 18px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); transition: all 0.15s ease; white-space: nowrap; }
-        .btn-refresh:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(62, 229, 224, 0.4); }
+        .btn-refresh:hover:not(:disabled) { transform: translateY(-1px); }
         .btn-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
 
         .edit-costs-banner { display: flex; align-items: center; gap: 10px; background: rgba(255, 167, 38, 0.08); border: 1px solid rgba(255, 167, 38, 0.3); border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -876,7 +908,8 @@ function ProductosView() {
         .banner-text { flex: 1; font-size: 13px; color: var(--text-secondary); line-height: 1.5; min-width: 220px; }
         .banner-text strong { color: var(--warning); }
 
-        .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+        /* 🔥 5 KPIs */
+        .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
         .kpi { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px; position: relative; overflow: hidden; }
         .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--kpi-c); opacity: 0.7; }
         .kpi-label { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
@@ -900,7 +933,6 @@ function ProductosView() {
         .btn-clear { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 14px; border-radius: 8px; cursor: pointer; font-family: inherit; }
         .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
         .dropdowns select { padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; font-family: inherit; min-width: 150px; outline: none; }
-        .dropdowns select option { background: var(--bg-elevated); color: var(--text-primary); }
 
         .counter { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
 
@@ -929,17 +961,19 @@ function ProductosView() {
         .thumb-placeholder { width: 44px; height: 44px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
         .thumb-manual { border-color: var(--accent); background: rgba(62, 229, 224, 0.08); color: var(--accent); }
 
-        .td-title { max-width: 380px; }
+        .td-title { max-width: 320px; }
         .title-text { font-weight: 500; color: var(--text-primary); line-height: 1.3; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .title-text-child { font-family: monospace; font-size: 12px; color: var(--accent); }
         .sku { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 2px; }
         .sku-missing { font-size: 11px; color: var(--text-dim); font-style: italic; margin-top: 2px; }
         .badge-manual { background: rgba(62, 229, 224, 0.15); color: var(--accent); padding: 2px 7px; border-radius: 6px; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; border: 1px solid var(--border-medium); }
-        .badge-count { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; border: 1px solid var(--border-subtle); cursor: help; }
+        .badge-count { background: rgba(62, 229, 224, 0.12); color: var(--accent); padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; border: 1px solid var(--border-subtle); }
         .price-range { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
-        .price-range small { color: var(--text-muted); margin: 0 2px; }
 
         .td-stock strong { font-size: 15px; color: var(--text-primary); }
+        .td-stock .stock-dim { color: var(--text-muted); }
+        .td-full { }
+        .full-qty { color: #3ee5e0 !important; font-size: 15px; }
         .td-num { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
         .text-dim { color: var(--text-dim); }
         .td-child-thumb { color: var(--text-dim); padding-left: 24px !important; }
@@ -972,6 +1006,9 @@ function ProductosView() {
 
         .empty { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 48px; text-align: center; border-radius: 12px; color: var(--text-muted); margin-top: 16px; }
 
+        @media (max-width: 1200px) {
+          .kpis { grid-template-columns: repeat(3, 1fr); }
+        }
         @media (max-width: 768px) {
           .header { flex-direction: column; align-items: stretch; gap: 12px; }
           .header h1 { font-size: 22px; }
@@ -979,7 +1016,6 @@ function ProductosView() {
           .btn-create-manual, .btn-edit-costs, .btn-refresh { width: 100%; justify-content: center; }
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
-          .top-toggles { flex-direction: column; }
           .action-bar { flex-direction: column; align-items: stretch; gap: 8px; }
           .dropdowns select { flex: 1; min-width: 0; }
           .tabla-wrapper { display: none; }
@@ -996,6 +1032,7 @@ function ProductosView() {
           .stat-label { display: block; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
           .card-cost-row { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-secondary); }
           .card-cost-row strong { color: var(--text-primary); font-weight: 600; }
+          .cost-iva-hint { font-size: 10px; color: var(--text-muted); }
           .card-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; flex-wrap: wrap; gap: 8px; }
         }
       `}</style>
@@ -1077,7 +1114,6 @@ function CostCell({ item, costInfo, editing, saving, saved, onSave }: {
         .cost-state { font-size: 12px; flex-shrink: 0; }
         .cost-saved { color: var(--success); }
         .cost-iva-select { background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-secondary); font-size: 11px; padding: 3px 4px; cursor: pointer; font-family: inherit; outline: none; }
-        .cost-iva-select:focus { border-color: var(--warning); }
       `}</style>
     </td>
   )
@@ -1194,8 +1230,7 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
             <>
               <div className="form-row">
                 <label className="form-label">SKU *</label>
-                <input type="text" value={sku} onChange={(e) => setSku(e.target.value.toUpperCase())} placeholder="Ej: LLAVMICKEY, PELUCHE, etc." className="form-input" disabled={isEdit} autoFocus={!isEdit} />
-                <span className="form-hint">{isEdit ? 'El SKU no se puede cambiar' : 'Identificador único.'}</span>
+                <input type="text" value={sku} onChange={(e) => setSku(e.target.value.toUpperCase())} placeholder="Ej: LLAVMICKEY" className="form-input" disabled={isEdit} autoFocus={!isEdit} />
               </div>
               <div className="form-row">
                 <label className="form-label">Título *</label>
@@ -1232,33 +1267,26 @@ function ManualItemModal({ editingSku, onClose, onSaved }: { editingSku: string 
         </div>
       </div>
       <style jsx>{`
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.15s ease; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
         .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 16px; max-width: 560px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
         .modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
         .modal-title { font-size: 18px; color: var(--text-primary); font-weight: 700; line-height: 1.3; margin-bottom: 4px; }
         .modal-subtitle { font-size: 13px; color: var(--text-muted); }
         .btn-close { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 14px; flex-shrink: 0; font-family: inherit; }
-        .btn-close:hover { color: var(--text-primary); border-color: var(--border-medium); }
         .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 16px; }
         .loading-text { color: var(--text-muted); text-align: center; padding: 24px; }
         .form-row { display: flex; flex-direction: column; gap: 6px; }
         .form-row-double { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .form-row-double > div { display: flex; flex-direction: column; gap: 6px; }
         .form-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
-        .form-input { padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; transition: border-color 0.15s ease; }
+        .form-input { padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; }
         .form-input:focus { border-color: var(--accent); }
         .form-input:disabled { opacity: 0.6; cursor: not-allowed; }
-        .form-input::placeholder { color: var(--text-muted); }
-        .form-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
         .error-msg { margin: 0 24px; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
         .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
         .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
-        .btn-cancel:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
-        .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); }
-        .btn-save:hover:not(:disabled) { transform: translateY(-1px); }
+        .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
         .btn-save:disabled, .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
-        @media (max-width: 600px) { .form-row-double { grid-template-columns: 1fr; } }
       `}</style>
     </div>
   )
@@ -1373,18 +1401,15 @@ function CombosView() {
         .kpi-value { font-size: 22px; font-weight: 700; color: var(--text-primary); }
         .filtros { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 16px; border-radius: 12px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
         .search-input { padding: 10px 14px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 14px; color: var(--text-primary); font-family: inherit; outline: none; }
-        .search-input::placeholder { color: var(--text-muted); }
         .search-input:focus { border-color: var(--accent); }
         .dropdowns { display: flex; gap: 8px; flex-wrap: wrap; }
         .dropdowns select { padding: 9px 12px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer; font-family: inherit; min-width: 200px; outline: none; }
-        .dropdowns select:focus { border-color: var(--accent); }
         .counter { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; }
         .combos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
         .empty { background: var(--bg-card); border: 1px solid var(--border-subtle); padding: 48px; text-align: center; border-radius: 12px; color: var(--text-muted); margin-top: 16px; }
         @media (max-width: 768px) {
           .kpis { grid-template-columns: repeat(2, 1fr); }
           .kpi-value { font-size: 18px; }
-          .dropdowns select { flex: 1; min-width: 0; }
           .combos-grid { grid-template-columns: 1fr; }
         }
       `}</style>
@@ -1461,7 +1486,6 @@ function ComboCard({ combo, onConfigure }: { combo: Combo; onConfigure: () => vo
         .stat-warning { color: var(--warning); }
         .stat-danger { color: var(--danger); }
         .btn-toggle-components { background: transparent; border: 1px dashed var(--border-subtle); color: var(--accent); padding: 8px; border-radius: 8px; font-size: 12px; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 8px; justify-content: center; }
-        .btn-toggle-components:hover { border-color: var(--accent); }
         .arrow { display: inline-block; transition: transform 0.18s ease; font-size: 10px; }
         .arrow-open { transform: rotate(90deg); }
         .components-list { display: flex; flex-direction: column; gap: 6px; }
@@ -1544,7 +1568,7 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         </div>
         <div className="modal-body">
           <div className="section-title">Productos que componen el combo</div>
-          {components.length === 0 && !showSearch && <div className="empty-components"><p>Aún no hay componentes. Agregá los productos que forman parte de este combo.</p></div>}
+          {components.length === 0 && !showSearch && <div className="empty-components"><p>Aún no hay componentes.</p></div>}
           <div className="components-edit-list">
             {components.map(c => (
               <div key={c.component_sku} className="component-edit-row">
@@ -1580,10 +1604,7 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
                       <button key={r.sku} className={`search-result ${alreadyAdded ? 'already-added' : ''}`} onClick={() => !alreadyAdded && addComponent(r.sku, r.title, r.is_manual ?? false)} disabled={alreadyAdded}>
                         {r.thumbnail ? <img src={r.thumbnail.replace('http://', 'https://')} alt="" className="result-thumb" /> : <div className="result-thumb-ph">{r.is_manual ? '📋' : '📦'}</div>}
                         <div className="result-info">
-                          <div className="result-title">
-                            {r.title}
-                            {r.is_manual ? <span className="src-badge src-manual">MANUAL</span> : <span className="src-badge src-ml">ML</span>}
-                          </div>
+                          <div className="result-title">{r.title}</div>
                           <div className="result-sku">SKU: {r.sku} · Stock: {r.minStock}</div>
                         </div>
                         {alreadyAdded && <span className="already-tag">Ya agregado</span>}
@@ -1602,15 +1623,13 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         </div>
       </div>
       <style jsx>{`
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; animation: fadeIn 0.15s ease; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
         .modal { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 16px; max-width: 720px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
         .modal-header { padding: 20px 24px; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
         .modal-title { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600; }
         .modal-subtitle { font-size: 17px; color: var(--text-primary); font-weight: 600; line-height: 1.3; margin-bottom: 4px; }
         .modal-sku { font-family: monospace; font-size: 11px; color: var(--text-muted); }
         .btn-close { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 36px; height: 36px; border-radius: 8px; cursor: pointer; font-size: 14px; flex-shrink: 0; }
-        .btn-close:hover { color: var(--text-primary); border-color: var(--border-medium); }
         .modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
         .section-title { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; font-weight: 600; }
         .empty-components { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; background: var(--bg-elevated); border: 1px dashed var(--border-subtle); border-radius: 10px; }
@@ -1622,15 +1641,12 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         .qty-input-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
         .qty-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
         .qty-input { width: 60px; padding: 6px 8px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-primary); text-align: center; font-family: inherit; outline: none; }
-        .qty-input:focus { border-color: var(--accent); }
         .btn-remove-component { background: transparent; border: 1px solid var(--border-subtle); color: var(--text-muted); width: 32px; height: 32px; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
         .btn-remove-component:hover { color: var(--danger); border-color: rgba(255, 71, 87, 0.4); }
         .btn-add-component { margin-top: 12px; width: 100%; background: transparent; border: 1px dashed var(--border-medium); color: var(--accent); padding: 10px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
-        .btn-add-component:hover { background: rgba(62, 229, 224, 0.05); }
         .search-component-section { margin-top: 12px; background: var(--bg-elevated); border: 1px solid var(--border-medium); border-radius: 10px; padding: 12px; }
         .search-header { display: flex; gap: 8px; margin-bottom: 10px; }
         .search-component-input { flex: 1; padding: 9px 12px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-primary); font-family: inherit; outline: none; }
-        .search-component-input:focus { border-color: var(--accent); }
         .btn-cancel-search { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 9px 14px; border-radius: 8px; font-size: 13px; cursor: pointer; font-family: inherit; }
         .search-hint { padding: 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
         .search-results { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
@@ -1649,9 +1665,7 @@ function ComboModal({ combo, onClose, onSaved }: { combo: Combo; onClose: () => 
         .error-msg { margin: 12px 24px 0; padding: 10px 14px; background: rgba(255, 71, 87, 0.1); border: 1px solid rgba(255, 71, 87, 0.3); border-radius: 8px; color: var(--danger); font-size: 13px; }
         .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px; }
         .btn-cancel { background: transparent; color: var(--text-muted); border: 1px solid var(--border-subtle); padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; font-family: inherit; }
-        .btn-cancel:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-medium); }
-        .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; box-shadow: 0 4px 14px rgba(62, 229, 224, 0.25); }
-        .btn-save:hover:not(:disabled) { transform: translateY(-1px); }
+        .btn-save { background: linear-gradient(135deg, var(--accent-deep) 0%, var(--accent-secondary) 50%, var(--accent) 100%); color: var(--bg-base); border: none; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; }
         .btn-save:disabled, .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
       `}</style>
     </div>
