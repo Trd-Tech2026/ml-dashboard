@@ -84,25 +84,19 @@ async function fetchShippingData(shippingId: string | number, token: string) {
     if (res.status !== 200) return { bonificacionReceiver: 0, envioCobradoCliente: 0 }
     const data = await res.json()
 
-    const receiverDiscounts = data?.receiver?.discounts ?? []
+    // 🔥 FIX: Solo descuentos del SENDER (vendedor).
+    // receiver.discounts = descuento de envío dado al COMPRADOR (ej: envío gratis para el buyer).
+    // senders.discounts = bonificación que ML le paga al VENDEDOR.
+    // Antes se sumaban ambos → doble conteo (ej: $6.490 + $6.490 = $12.760 incorrecto).
     const senderDiscounts = data?.senders?.[0]?.discounts ?? []
-
-    const bonifLoyal = Array.isArray(receiverDiscounts)
-      ? receiverDiscounts
-          .filter((d: any) => d.type === 'loyal')
-          .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
-      : 0
-
-    const bonifMandatory = Array.isArray(senderDiscounts)
-      ? senderDiscounts
-          .filter((d: any) => d.type === 'mandatory')
-          .reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
+    const bonificacion = Array.isArray(senderDiscounts)
+      ? senderDiscounts.reduce((acc: number, d: any) => acc + Number(d.promoted_amount ?? 0), 0)
       : 0
 
     const envioCobradoCliente = Number(data?.receiver?.cost ?? 0)
 
     return {
-      bonificacionReceiver: bonifLoyal + bonifMandatory,
+      bonificacionReceiver: bonificacion,
       envioCobradoCliente,
     }
   } catch {
@@ -118,7 +112,6 @@ async function fetchShipmentInfo(shippingId: string | number, token: string) {
     if (res.status !== 200) return { logistic_type: null as string | null, receiver_address: null as string | null }
     const data = await res.json()
 
-    // Armar dirección legible
     const addr = data?.receiver_address
     let receiver_address: string | null = null
     if (addr) {
@@ -139,7 +132,6 @@ async function fetchShipmentInfo(shippingId: string | number, token: string) {
   }
 }
 
-// 🔥 NUEVO: obtener thumbnail del item de ML
 async function fetchItemThumbnail(itemId: string, token: string): Promise<string | null> {
   try {
     const res = await fetch(`https://api.mercadolibre.com/items/${itemId}?attributes=thumbnail`, {
@@ -147,7 +139,6 @@ async function fetchItemThumbnail(itemId: string, token: string): Promise<string
     })
     if (res.status !== 200) return null
     const data = await res.json()
-    // Convertir thumbnail a https y versión más grande
     const thumb: string = data?.thumbnail ?? ''
     return thumb ? thumb.replace('http://', 'https://').replace('-I.jpg', '-O.jpg') : null
   } catch {
@@ -155,7 +146,6 @@ async function fetchItemThumbnail(itemId: string, token: string): Promise<string
   }
 }
 
-// 🔥 NUEVO: obtener totales del día para el resumen de la notificación
 async function fetchDailyTotals(supabase: SupabaseClient): Promise<DailyTotals> {
   const hoy = hoyAR()
   const ayer = ayerAR()
@@ -180,7 +170,6 @@ async function fetchDailyTotals(supabase: SupabaseClient): Promise<DailyTotals> 
   return { totalHoy, ventasHoy, totalAyer, ventasAyer }
 }
 
-// 🔥 NUEVO: verificar stock crítico tras la venta
 async function checkStockCritico(supabase: SupabaseClient, sellerSkus: string[]): Promise<void> {
   if (sellerSkus.length === 0) return
   try {
@@ -366,7 +355,6 @@ export async function GET() {
   let yaRefresque = false
   let modoSync = ''
 
-  // 🔥 Acumular notificaciones para enviar al final
   const nuevasPagadas: Array<{
     order: any
     net_received: number
@@ -412,7 +400,6 @@ export async function GET() {
     const results = ordersData.results ?? []
     if (results.length === 0) break
 
-    // 🔥 Verificar cuáles son órdenes nuevas (no estaban en DB)
     const orderIdsLote = results.map((o: any) => o.id)
     const { data: existentes } = await supabase
       .from('orders')
@@ -455,7 +442,6 @@ export async function GET() {
         ? total + envioCobradoCliente - fiscal.cargos_total - fiscal.imp_total + bonificacion - costoFlexEstimado
         : 0
 
-      // 🔥 Detectar si es orden nueva o cambió a cancelada
       const eraStatus = existentesMap.get(String(order.id))
       const esNueva = !eraStatus
       const nuevaCancelacion = order.status === 'cancelled' && eraStatus && eraStatus !== 'cancelled'
@@ -476,7 +462,6 @@ export async function GET() {
           item_qty: itemQty,
         })
 
-        // Guardar SKU para check de stock crítico
         const sellerSku = primerItem?.item?.seller_sku ?? null
         if (sellerSku) skusVendidos.push(sellerSku)
       }
@@ -504,7 +489,11 @@ export async function GET() {
       }
     }))
 
-    const ordersToInsert = ordersConFinanzas.map(({ order, marketplace_fee, shipping_cost, discounts, bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado, net_received, shipping_logistic_type, fiscal }) => ({
+    const ordersToInsert = ordersConFinanzas.map(({
+      order, marketplace_fee, shipping_cost, discounts,
+      bonificacion_envio, envio_cobrado_cliente, costo_flex_estimado,
+      net_received, shipping_logistic_type, fiscal
+    }) => ({
       order_id: order.id,
       status: order.status,
       total_amount: Number(order.total_amount ?? 0),
@@ -569,7 +558,6 @@ export async function GET() {
     offset += LIMIT
   }
 
-  // 🔥 Enviar notificaciones Telegram después del sync
   if (!huboError && nuevasPagadas.length > 0) {
     const daily = await fetchDailyTotals(supabase)
 
@@ -587,7 +575,7 @@ export async function GET() {
         venta.item_qty,
         thumbnail,
         daily,
-        null, // margen: requiere costo, se puede agregar después
+        null,
       )
     }
   }
@@ -596,7 +584,6 @@ export async function GET() {
     await tgCancelacion(cancelacion.order, cancelacion.item_title, cancelacion.total)
   }
 
-  // 🔥 Check stock crítico para SKUs vendidos hoy
   if (skusVendidos.length > 0) {
     await checkStockCritico(supabase, [...new Set(skusVendidos)])
   }

@@ -39,8 +39,6 @@ type Group = {
   is_manual: boolean
   maxLastUpdated: string | null
   maxDateCreated: string | null
-  fullStock: number      // 🔥 stock en Full ML
-  depositoStock: number  // 🔥 stock en depósito propio (stock_movements)
 }
 
 const SELECT_FIELDS = 'item_id, title, thumbnail, permalink, available_quantity, sold_quantity, price, currency, status, logistic_type, free_shipping, shipping_tags, is_flex, seller_sku, last_updated, archived, date_created'
@@ -67,50 +65,37 @@ export async function GET(request: Request) {
   const applyFilters = (q: any) => {
     if (archivedView === 'true') q = q.eq('archived', true)
     else if (archivedView === 'false') q = q.eq('archived', false)
-
     if (search) {
       const safe = search.replace(/[,()]/g, ' ')
       q = q.or(`title.ilike.%${safe}%,seller_sku.ilike.%${safe}%`)
     }
-
     if (status !== 'all') q = q.eq('status', status)
-
     if (logistic !== 'all') {
       if (logistic === 'flex') q = q.eq('is_flex', true)
       else if (logistic === 'null') q = q.is('logistic_type', null)
       else q = q.eq('logistic_type', logistic)
     }
-
     if (stockFilter === 'zero') q = q.eq('available_quantity', 0)
     else if (stockFilter === 'critical') q = q.gt('available_quantity', 0).lt('available_quantity', 5)
     else if (stockFilter === 'normal') q = q.gte('available_quantity', 5)
-
     return q
   }
 
   const fetchManualItems = async (): Promise<Item[]> => {
     if (!includeManual) return []
     if (archivedView === 'true') return []
-
-    let q = supabase
-      .from('manual_items')
-      .select('seller_sku, title, available_quantity, cost, notes, created_at, updated_at')
-
+    let q = supabase.from('manual_items').select('seller_sku, title, available_quantity, cost, notes, created_at, updated_at')
     if (search) {
       const safe = search.replace(/[,()]/g, ' ')
       q = q.or(`title.ilike.%${safe}%,seller_sku.ilike.%${safe}%`)
     }
-
     if (stockFilter === 'zero') q = q.eq('available_quantity', 0)
     else if (stockFilter === 'critical') q = q.gt('available_quantity', 0).lt('available_quantity', 5)
     else if (stockFilter === 'normal') q = q.gte('available_quantity', 5)
-
     if (status !== 'all' && status !== 'active') return []
     if (logistic !== 'all' && logistic !== 'null') return []
-
     const { data, error } = await q
     if (error || !data) return []
-
     return data.map(m => ({
       item_id: `MANUAL_${m.seller_sku}`,
       title: m.title,
@@ -142,7 +127,6 @@ export async function GET(request: Request) {
       case 'sold_desc': query = query.order('sold_quantity', { ascending: false }); break
       case 'title_asc': query = query.order('title', { ascending: true }); break
       case 'recent': query = query.order('date_created', { ascending: false, nullsFirst: false }); break
-      case 'stock_desc':
       default: query = query.order('available_quantity', { ascending: false }); break
     }
     const from = (page - 1) * pageSize
@@ -181,17 +165,9 @@ export async function GET(request: Request) {
       existing.totalSold += item.sold_quantity
       existing.minPrice = Math.min(existing.minPrice, item.price || 0)
       existing.maxPrice = Math.max(existing.maxPrice, item.price || 0)
-      if (item.last_updated && (!existing.maxLastUpdated || item.last_updated > existing.maxLastUpdated)) {
-        existing.maxLastUpdated = item.last_updated
-      }
-      if (item.date_created && (!existing.maxDateCreated || item.date_created > existing.maxDateCreated)) {
-        existing.maxDateCreated = item.date_created
-      }
+      if (item.last_updated && (!existing.maxLastUpdated || item.last_updated > existing.maxLastUpdated)) existing.maxLastUpdated = item.last_updated
+      if (item.date_created && (!existing.maxDateCreated || item.date_created > existing.maxDateCreated)) existing.maxDateCreated = item.date_created
       if (item.is_manual) existing.is_manual = true
-      // 🔥 Full stock: máximo de publicaciones fulfillment
-      if (item.logistic_type === 'fulfillment') {
-        existing.fullStock = Math.max(existing.fullStock, item.available_quantity ?? 0)
-      }
     } else {
       map.set(key, {
         key, sku: item.seller_sku, title: item.title, thumbnail: item.thumbnail,
@@ -201,14 +177,10 @@ export async function GET(request: Request) {
         minPrice: item.price || 0, maxPrice: item.price || 0,
         currency: item.currency, is_manual: !!item.is_manual,
         maxLastUpdated: item.last_updated, maxDateCreated: item.date_created ?? null,
-        // 🔥
-        fullStock: item.logistic_type === 'fulfillment' ? (item.available_quantity ?? 0) : 0,
-        depositoStock: 0,
       })
     }
   }
 
-  // Reordenar items dentro del grupo: activos primero, luego más vendidos
   for (const group of Array.from(map.values())) {
     if (group.items.length > 1) {
       group.items.sort((a, b) => {
@@ -219,29 +191,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // 🔥 Calcular depositoStock desde stock_movements
-  const allSkus = Array.from(map.values())
-    .map(g => g.sku)
-    .filter((s): s is string => !!s)
-
-  if (allSkus.length > 0) {
-    const CHUNK = 500
-    const movMap = new Map<string, number>()
-    for (let i = 0; i < allSkus.length; i += CHUNK) {
-      const chunk = allSkus.slice(i, i + CHUNK)
-      const { data: movements } = await supabase
-        .from('stock_movements')
-        .select('seller_sku, quantity_delta')
-        .in('seller_sku', chunk)
-      for (const m of (movements ?? []) as { seller_sku: string; quantity_delta: number }[]) {
-        movMap.set(m.seller_sku, (movMap.get(m.seller_sku) ?? 0) + (m.quantity_delta ?? 0))
-      }
-    }
-    for (const group of Array.from(map.values())) {
-      if (group.sku) group.depositoStock = movMap.get(group.sku) ?? 0
-    }
-  }
-
   let groups = Array.from(map.values())
 
   switch (sort) {
@@ -249,13 +198,8 @@ export async function GET(request: Request) {
     case 'sold_desc': groups.sort((a, b) => b.totalSold - a.totalSold); break
     case 'title_asc': groups.sort((a, b) => a.title.localeCompare(b.title, 'es', { sensitivity: 'base' })); break
     case 'recent':
-      groups.sort((a, b) => {
-        const da = a.maxDateCreated ?? ''
-        const db = b.maxDateCreated ?? ''
-        return db.localeCompare(da)
-      })
+      groups.sort((a, b) => { const da = a.maxDateCreated ?? ''; const db = b.maxDateCreated ?? ''; return db.localeCompare(da) })
       break
-    case 'stock_desc':
     default: groups.sort((a, b) => b.totalStock - a.totalStock); break
   }
 
@@ -280,25 +224,20 @@ function sortItems(items: Item[], sort: string): Item[] {
     case 'stock_asc': return [...items].sort((a, b) => a.available_quantity - b.available_quantity)
     case 'sold_desc': return [...items].sort((a, b) => b.sold_quantity - a.sold_quantity)
     case 'title_asc': return [...items].sort((a, b) => a.title.localeCompare(b.title, 'es'))
-    case 'recent':
-      return [...items].sort((a, b) => {
-        const da = a.date_created ?? ''
-        const db = b.date_created ?? ''
-        return db.localeCompare(da)
-      })
+    case 'recent': return [...items].sort((a, b) => { const da = a.date_created ?? ''; const db = b.date_created ?? ''; return db.localeCompare(da) })
     default: return [...items].sort((a, b) => b.available_quantity - a.available_quantity)
   }
 }
 
 async function computeKpis(supabase: any, includeManual: boolean) {
-  type StockRow = { item_id: string; seller_sku: string | null; available_quantity: number; logistic_type: string | null }
+  type StockRow = { item_id: string; seller_sku: string | null; available_quantity: number }
   const itemsForKpis: StockRow[] = []
   let from = 0
   const PAGE = 1000
   while (true) {
     const { data, error } = await supabase
       .from('items')
-      .select('item_id, seller_sku, available_quantity, logistic_type')
+      .select('item_id, seller_sku, available_quantity')
       .eq('archived', false)
       .range(from, from + PAGE - 1)
     if (error || !data || data.length === 0) break
@@ -307,24 +246,13 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     from += PAGE
   }
 
-  // Agrupar por SKU único. Stock = máximo entre publicaciones.
   const stockByGroup = new Map<string, number>()
-  const fullByGroup = new Map<string, number>()
-
   for (const item of itemsForKpis) {
     const key = item.seller_sku ? `sku:${item.seller_sku}` : `item:${item.item_id}`
-    const itemStock = item.available_quantity ?? 0
-
-    // Total stock por grupo
     const current = stockByGroup.get(key)
+    const itemStock = item.available_quantity ?? 0
     if (current === undefined) stockByGroup.set(key, itemStock)
     else stockByGroup.set(key, Math.max(current, itemStock))
-
-    // Full stock por grupo
-    if (item.logistic_type === 'fulfillment') {
-      const currentFull = fullByGroup.get(key) ?? 0
-      fullByGroup.set(key, Math.max(currentFull, itemStock))
-    }
   }
 
   let uniqueSkus = stockByGroup.size
@@ -336,19 +264,6 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     if (stock === 0) sinStockCount++
     else if (stock < 5) criticoCount++
   }
-
-  // 🔥 Stock Full total
-  const stockFull = Array.from(fullByGroup.values()).reduce((s, v) => s + v, 0)
-
-  // 🔥 Stock Depósito total (desde stock_movements)
-  let stockDeposito = 0
-  try {
-    const { data: movData } = await supabase
-      .from('stock_movements')
-      .select('quantity_delta')
-    stockDeposito = ((movData ?? []) as { quantity_delta: number }[])
-      .reduce((s, m) => s + (m.quantity_delta ?? 0), 0)
-  } catch {}
 
   let manualCount = 0
   let manualStock = 0
@@ -379,8 +294,6 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     stock_total: stockTotal + manualStock,
     archived_count: archivedCount ?? 0,
     manual_count: manualCount,
-    stock_full: stockFull,        // 🔥
-    stock_deposito: stockDeposito, // 🔥
   }
 }
 

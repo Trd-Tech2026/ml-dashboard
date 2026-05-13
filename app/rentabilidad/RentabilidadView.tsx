@@ -1,4 +1,4 @@
-// v2 - IIBB block
+// v3 - Hoy/Ayer/Históricas tabs + IVA crédito ML
 'use client'
 
 import { useState } from 'react'
@@ -23,6 +23,8 @@ type Props = {
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
+const HISTORICAS_PERIODS = ['7dias', 'mes', '90dias']
+
 function calcCambio(actual: number, previo: number): Cambio {
   if (previo === 0) {
     if (actual === 0) return { pct: 0, trend: 'flat' }
@@ -43,6 +45,12 @@ export default function RentabilidadView({
   const [calcOpen, setCalcOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [activeTab, setActiveTab] = useState<'metricas' | 'insights'>('metricas')
+
+  const isHistoricas = HISTORICAS_PERIODS.includes(period)
+
+  // Mes actual en español para el label
+  const mesActual = new Date().toLocaleDateString('es-AR', { month: 'long', timeZone: TZ })
+  const mesCapital = mesActual.charAt(0).toUpperCase() + mesActual.slice(1)
 
   const handleSync = async () => {
     setSyncing(true)
@@ -97,17 +105,44 @@ export default function RentabilidadView({
     return <span className={`cambio ${cls}`}>{arrow} {Math.abs(cambio.pct).toFixed(0)}% {label}</span>
   }
 
-  const periodos = [
-    { value: 'hoy', label: 'Hoy' },
-    { value: 'semana', label: 'Esta semana' },
-    { value: 'mes', label: 'Este mes' },
-  ]
-
   const mejorDiaFormatted = calcActual.mejorDiaFecha
     ? new Date(calcActual.mejorDiaFecha + 'T12:00:00-03:00').toLocaleDateString('es-AR', {
         day: 'numeric', month: 'short', timeZone: TZ
       })
     : '—'
+
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    background: 'transparent',
+    border: 'none',
+    padding: '10px 18px',
+    fontSize: '14px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    borderBottom: `2px solid ${active ? '#3ee5e0' : 'transparent'}`,
+    color: active ? '#3ee5e0' : 'var(--text-muted)',
+    marginBottom: '-1px',
+    transition: 'all 0.15s ease',
+  })
+
+  const subBtnStyle = (active: boolean): React.CSSProperties => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '8px 16px',
+    borderRadius: '8px',
+    fontSize: '13px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    textDecoration: 'none',
+    border: '1px solid',
+    borderColor: active ? 'rgba(62, 229, 224, 0.7)' : 'var(--border-subtle)',
+    background: active
+      ? 'linear-gradient(135deg, #1ca0c4 0%, #3ee5e0 100%)'
+      : 'var(--bg-card)',
+    color: active ? '#0a121c' : 'var(--text-secondary)',
+    transition: 'all 0.15s ease',
+  })
 
   return (
     <div className="page">
@@ -136,6 +171,7 @@ export default function RentabilidadView({
         </div>
       </div>
 
+      {/* Main tabs: Métricas / Insights IA */}
       <div className="main-tabs">
         <button
           className={`main-tab ${activeTab === 'metricas' ? 'main-tab-active' : ''}`}
@@ -153,33 +189,48 @@ export default function RentabilidadView({
 
       {activeTab === 'metricas' ? (
         <>
-          <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-            {periodos.map(p => {
-              const activo = period === p.value
-              const baseStyle: React.CSSProperties = {
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                padding: '10px 22px', borderRadius: '10px', fontSize: '13px', fontWeight: 600,
-                textDecoration: 'none', letterSpacing: '0.3px', transition: 'all 0.18s ease',
-                border: '1px solid rgba(62, 229, 224, 0.4)',
-              }
-              const styleActivo: React.CSSProperties = {
-                ...baseStyle,
-                background: 'linear-gradient(135deg, #1ca0c4 0%, #3ee5e0 100%)',
-                color: '#0a121c', borderColor: 'rgba(62, 229, 224, 0.7)',
-                boxShadow: '0 4px 18px rgba(62, 229, 224, 0.35)',
-              }
-              const styleInactivo: React.CSSProperties = {
-                ...baseStyle,
-                background: 'linear-gradient(135deg, #0d4d6e 0%, #1ca0c4 100%)',
-                color: '#ffffff', opacity: 0.55,
-                boxShadow: '0 2px 10px rgba(28, 160, 196, 0.15)',
-              }
-              return (
-                <Link key={p.value} href={`/rentabilidad?period=${p.value}`} style={activo ? styleActivo : styleInactivo}>
-                  {p.label}
+          {/* Period selector: Hoy / Ayer / Históricas */}
+          <div className="period-selector">
+            <div className="period-tabs" style={{ borderBottom: '1px solid var(--border-subtle)', marginBottom: '0' }}>
+              <Link href="/rentabilidad?period=hoy" style={tabStyle(period === 'hoy')}>
+                🟢 Hoy
+              </Link>
+              <Link href="/rentabilidad?period=ayer" style={tabStyle(period === 'ayer')}>
+                🌙 Ayer
+              </Link>
+              <span style={tabStyle(isHistoricas)}>
+                📊 Históricas
+              </span>
+            </div>
+
+            {/* Sub-opciones Históricas */}
+            {isHistoricas && (
+              <div className="historicas-sub">
+                <Link href="/rentabilidad?period=7dias" style={subBtnStyle(period === '7dias')}>
+                  Últimos 7 días
                 </Link>
-              )
-            })}
+                <Link href="/rentabilidad?period=mes" style={subBtnStyle(period === 'mes')}>
+                  Mes en curso ({mesCapital})
+                </Link>
+                <Link href="/rentabilidad?period=90dias" style={subBtnStyle(period === '90dias')}>
+                  Últimos 90 días
+                </Link>
+              </div>
+            )}
+            {/* Si no está en históricas, mostrar el botón para entrar */}
+            {!isHistoricas && (
+              <div className="historicas-sub">
+                <Link href="/rentabilidad?period=7dias" style={subBtnStyle(false)}>
+                  Últimos 7 días
+                </Link>
+                <Link href="/rentabilidad?period=mes" style={subBtnStyle(false)}>
+                  Mes en curso ({mesCapital})
+                </Link>
+                <Link href="/rentabilidad?period=90dias" style={subBtnStyle(false)}>
+                  Últimos 90 días
+                </Link>
+              </div>
+            )}
           </div>
 
           {calcActual.unidadesSinCosto > 0 && (
@@ -310,7 +361,6 @@ export default function RentabilidadView({
 
             {/* IVA + IIBB apilados */}
             <div className="bk-col-right">
-
               {/* IVA */}
               <div className="bk-card">
                 <div className="bk-card-title">IVA (Resp. Inscripto)</div>
@@ -320,8 +370,12 @@ export default function RentabilidadView({
                     <span className="bk-value">{formatARS(calcActual.ivaDebito)}</span>
                   </div>
                   <div className="bk-row bk-row-iva">
-                    <span className="bk-label">IVA crédito</span>
-                    <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCredito)}</span>
+                    <span className="bk-label">IVA crédito mercadería</span>
+                    <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCreditoMerca)}</span>
+                  </div>
+                  <div className="bk-row bk-row-iva">
+                    <span className="bk-label">IVA crédito comisiones ML</span>
+                    <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCreditoML)}</span>
                   </div>
                   <div className="bk-row bk-row-total bk-row-iva">
                     <span className="bk-label-total">
@@ -333,11 +387,11 @@ export default function RentabilidadView({
                   </div>
                 </div>
                 <div className="bk-card-hint">
-                  21% cobrado al cliente menos IVA pagado en compras.
+                  ML emite Factura A por sus comisiones — ese IVA es crédito fiscal reclamable.
                 </div>
               </div>
 
-              {/* 🔥 IIBB */}
+              {/* IIBB */}
               <div className="bk-card bk-card-iibb">
                 <div className="bk-card-title">IIBB (Convenio Multilateral)</div>
                 <div className="bk-list">
@@ -360,7 +414,6 @@ export default function RentabilidadView({
                   Lo retenido por ML es un pago a cuenta. El resto lo declarás en la DJ mensual de IIBB.
                 </div>
               </div>
-
             </div>
           </div>
 
@@ -441,7 +494,7 @@ export default function RentabilidadView({
         .spinning { display: inline-block; animation: spin 1s linear infinite; }
         @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
-        .main-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 24px; }
+        .main-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-subtle); margin-bottom: 20px; }
         .main-tab {
           background: transparent; border: none; padding: 12px 18px; color: var(--text-muted);
           font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
@@ -449,6 +502,22 @@ export default function RentabilidadView({
         }
         .main-tab:hover { color: var(--text-secondary); }
         .main-tab.main-tab-active { color: #3ee5e0; border-bottom-color: #3ee5e0; }
+
+        /* Period selector */
+        .period-selector { margin-bottom: 20px; }
+        .period-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-subtle); margin-bottom: 14px; }
+        .period-tabs a, .period-tabs span {
+          display: inline-flex; align-items: center; padding: 10px 18px;
+          font-size: 14px; font-weight: 600; cursor: pointer;
+          border-bottom: 2px solid transparent; margin-bottom: -1px;
+          transition: all 0.15s ease; text-decoration: none;
+        }
+        .historicas-sub {
+          display: flex; gap: 8px; flex-wrap: wrap;
+        }
+        .historicas-sub a {
+          text-decoration: none;
+        }
 
         .warn-banner {
           display: flex; gap: 10px; align-items: flex-start;
@@ -459,7 +528,6 @@ export default function RentabilidadView({
         .warn-banner > span:first-child { font-size: 18px; flex-shrink: 0; }
         .warn-text strong { color: var(--warning); }
         .warn-link { color: var(--warning); font-weight: 600; }
-        .warn-link:hover { text-decoration: underline; }
 
         @keyframes palpitar-trd {
           0%, 100% { border-color: rgba(62, 229, 224, 0.25); box-shadow: 0 0 0 0 rgba(62, 229, 224, 0.15), 0 0 60px rgba(28, 160, 196, 0.06); }
@@ -502,31 +570,18 @@ export default function RentabilidadView({
         .cambio-bad { color: var(--danger); }
         .cambio-flat { color: var(--text-muted); }
 
-        /* 🔥 Nuevo layout: Operativo + columna derecha (IVA apilado con IIBB) */
         .breakdown-row {
-          display: grid;
-          grid-template-columns: 1.6fr 1fr;
-          gap: 16px;
-          margin-bottom: 16px;
-          align-items: start;
+          display: grid; grid-template-columns: 1.6fr 1fr;
+          gap: 16px; margin-bottom: 16px; align-items: start;
         }
-        .bk-col-right {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
+        .bk-col-right { display: flex; flex-direction: column; gap: 16px; }
         .bk-card {
           background: rgba(10, 18, 28, 0.6);
           border: 1px solid rgba(62, 229, 224, 0.12);
           border-radius: 14px; padding: 18px 22px;
         }
-        /* 🔥 IIBB card con acento naranja */
-        .bk-card-iibb {
-          background: rgba(10, 18, 28, 0.6);
-          border-color: rgba(251, 191, 36, 0.2);
-        }
+        .bk-card-iibb { background: rgba(10, 18, 28, 0.6); border-color: rgba(251, 191, 36, 0.2); }
         .bk-card-iibb .bk-card-title { color: #fbbf24; }
-
         .bk-card-title { font-size: 11px; letter-spacing: 1.2px; color: var(--text-muted); font-weight: 500; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid rgba(62, 229, 224, 0.08); }
         .bk-list { display: flex; flex-direction: column; gap: 9px; }
         .bk-row { display: grid; grid-template-columns: 1fr auto 90px; align-items: baseline; gap: 16px; }
