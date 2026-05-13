@@ -65,50 +65,37 @@ export async function GET(request: Request) {
   const applyFilters = (q: any) => {
     if (archivedView === 'true') q = q.eq('archived', true)
     else if (archivedView === 'false') q = q.eq('archived', false)
-
     if (search) {
       const safe = search.replace(/[,()]/g, ' ')
       q = q.or(`title.ilike.%${safe}%,seller_sku.ilike.%${safe}%`)
     }
-
     if (status !== 'all') q = q.eq('status', status)
-
     if (logistic !== 'all') {
       if (logistic === 'flex') q = q.eq('is_flex', true)
       else if (logistic === 'null') q = q.is('logistic_type', null)
       else q = q.eq('logistic_type', logistic)
     }
-
     if (stockFilter === 'zero') q = q.eq('available_quantity', 0)
     else if (stockFilter === 'critical') q = q.gt('available_quantity', 0).lt('available_quantity', 5)
     else if (stockFilter === 'normal') q = q.gte('available_quantity', 5)
-
     return q
   }
 
   const fetchManualItems = async (): Promise<Item[]> => {
     if (!includeManual) return []
     if (archivedView === 'true') return []
-
-    let q = supabase
-      .from('manual_items')
-      .select('seller_sku, title, available_quantity, cost, notes, created_at, updated_at')
-
+    let q = supabase.from('manual_items').select('seller_sku, title, available_quantity, cost, notes, created_at, updated_at')
     if (search) {
       const safe = search.replace(/[,()]/g, ' ')
       q = q.or(`title.ilike.%${safe}%,seller_sku.ilike.%${safe}%`)
     }
-
     if (stockFilter === 'zero') q = q.eq('available_quantity', 0)
     else if (stockFilter === 'critical') q = q.gt('available_quantity', 0).lt('available_quantity', 5)
     else if (stockFilter === 'normal') q = q.gte('available_quantity', 5)
-
     if (status !== 'all' && status !== 'active') return []
     if (logistic !== 'all' && logistic !== 'null') return []
-
     const { data, error } = await q
     if (error || !data) return []
-
     return data.map(m => ({
       item_id: `MANUAL_${m.seller_sku}`,
       title: m.title,
@@ -140,7 +127,6 @@ export async function GET(request: Request) {
       case 'sold_desc': query = query.order('sold_quantity', { ascending: false }); break
       case 'title_asc': query = query.order('title', { ascending: true }); break
       case 'recent': query = query.order('date_created', { ascending: false, nullsFirst: false }); break
-      case 'stock_desc':
       default: query = query.order('available_quantity', { ascending: false }); break
     }
     const from = (page - 1) * pageSize
@@ -175,18 +161,12 @@ export async function GET(request: Request) {
     const existing = map.get(key)
     if (existing) {
       existing.items.push(item)
-      // Stock: MÁXIMO entre publicaciones (mismo producto físico = mismo stock real)
       existing.totalStock = Math.max(existing.totalStock, item.available_quantity ?? 0)
-      // Ventas: SUMA real entre todas las publicaciones del mismo SKU
       existing.totalSold += item.sold_quantity
       existing.minPrice = Math.min(existing.minPrice, item.price || 0)
       existing.maxPrice = Math.max(existing.maxPrice, item.price || 0)
-      if (item.last_updated && (!existing.maxLastUpdated || item.last_updated > existing.maxLastUpdated)) {
-        existing.maxLastUpdated = item.last_updated
-      }
-      if (item.date_created && (!existing.maxDateCreated || item.date_created > existing.maxDateCreated)) {
-        existing.maxDateCreated = item.date_created
-      }
+      if (item.last_updated && (!existing.maxLastUpdated || item.last_updated > existing.maxLastUpdated)) existing.maxLastUpdated = item.last_updated
+      if (item.date_created && (!existing.maxDateCreated || item.date_created > existing.maxDateCreated)) existing.maxDateCreated = item.date_created
       if (item.is_manual) existing.is_manual = true
     } else {
       map.set(key, {
@@ -201,7 +181,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // Reordenar items dentro del grupo: activos primero, luego más vendidos
   for (const group of Array.from(map.values())) {
     if (group.items.length > 1) {
       group.items.sort((a, b) => {
@@ -219,13 +198,8 @@ export async function GET(request: Request) {
     case 'sold_desc': groups.sort((a, b) => b.totalSold - a.totalSold); break
     case 'title_asc': groups.sort((a, b) => a.title.localeCompare(b.title, 'es', { sensitivity: 'base' })); break
     case 'recent':
-      groups.sort((a, b) => {
-        const da = a.maxDateCreated ?? ''
-        const db = b.maxDateCreated ?? ''
-        return db.localeCompare(da)
-      })
+      groups.sort((a, b) => { const da = a.maxDateCreated ?? ''; const db = b.maxDateCreated ?? ''; return db.localeCompare(da) })
       break
-    case 'stock_desc':
     default: groups.sort((a, b) => b.totalStock - a.totalStock); break
   }
 
@@ -250,19 +224,11 @@ function sortItems(items: Item[], sort: string): Item[] {
     case 'stock_asc': return [...items].sort((a, b) => a.available_quantity - b.available_quantity)
     case 'sold_desc': return [...items].sort((a, b) => b.sold_quantity - a.sold_quantity)
     case 'title_asc': return [...items].sort((a, b) => a.title.localeCompare(b.title, 'es'))
-    case 'recent':
-      return [...items].sort((a, b) => {
-        const da = a.date_created ?? ''
-        const db = b.date_created ?? ''
-        return db.localeCompare(da)
-      })
+    case 'recent': return [...items].sort((a, b) => { const da = a.date_created ?? ''; const db = b.date_created ?? ''; return db.localeCompare(da) })
     default: return [...items].sort((a, b) => b.available_quantity - a.available_quantity)
   }
 }
 
-// =============================================================
-// KPIs por SKU ÚNICO (no por publicaciones)
-// =============================================================
 async function computeKpis(supabase: any, includeManual: boolean) {
   type StockRow = { item_id: string; seller_sku: string | null; available_quantity: number }
   const itemsForKpis: StockRow[] = []
@@ -280,7 +246,6 @@ async function computeKpis(supabase: any, includeManual: boolean) {
     from += PAGE
   }
 
-  // Agrupar por SKU único (o item_id si no tiene SKU). Stock = máximo entre publicaciones.
   const stockByGroup = new Map<string, number>()
   for (const item of itemsForKpis) {
     const key = item.seller_sku ? `sku:${item.seller_sku}` : `item:${item.item_id}`

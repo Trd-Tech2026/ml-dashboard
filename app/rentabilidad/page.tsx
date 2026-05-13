@@ -26,23 +26,6 @@ function inicioDiaArgentina(offsetDias: number = 0): Date {
   return d
 }
 
-function inicioSemanaArgentina(offsetSemanas: number = 0): Date {
-  const ahora = new Date()
-  const fechaAR = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(ahora)
-  const [year, month, day] = fechaAR.split('-').map(Number)
-  const dateAR = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T12:00:00-03:00`)
-  const dayOfWeek = dateAR.getUTCDay()
-  const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1
-  dateAR.setUTCDate(dateAR.getUTCDate() - daysToMonday)
-  dateAR.setUTCDate(dateAR.getUTCDate() + offsetSemanas * 7)
-  const yyyy = dateAR.getUTCFullYear()
-  const mm = String(dateAR.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(dateAR.getUTCDate()).padStart(2, '0')
-  return new Date(`${yyyy}-${mm}-${dd}T00:00:00-03:00`)
-}
-
 function inicioMesArgentina(offsetMeses: number = 0): Date {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
@@ -103,8 +86,9 @@ export type Calculo = {
   gastosVarios: number
   ivaDebito: number
   ivaCredito: number
+  ivaCreditoMerca: number
+  ivaCreditoML: number
   ivaAPagar: number
-  // 🔥 IIBB
   iibbTasa: number
   iibbObligacion: number
   iibbRetenido: number
@@ -153,7 +137,7 @@ function calcularRentabilidad(
   gastosVariosAmount: number,
   desde: Date,
   hasta: Date,
-  iibbTasa: number  // 🔥 NUEVO: tasa IIBB desde tax_config (ej: 5)
+  iibbTasa: number
 ): Calculo {
   const paid = orders.filter(o => o.status === 'paid')
   const paidIds = new Set(paid.map(o => String(o.order_id)))
@@ -165,17 +149,14 @@ function calcularRentabilidad(
   const envioCobradoTotal = paid.reduce((s, o) => s + Number(o.envio_cobrado_cliente ?? 0), 0)
   const costoFlexTotal = paid.reduce((s, o) => s + Number(o.costo_flex_estimado ?? 0), 0)
 
-  // 🔥 IIBB: lo que ML ya retuvo como agente de recaudación
   const iibbRetenido = paid.reduce((s, o) => s + Number(o.imp_iibb_total ?? 0), 0)
-  // Obligación total = facturación bruta × tasa (ej: 5%)
   const iibbObligacion = facturacion * (iibbTasa / 100)
-  // Lo que falta pagar = obligación − ya retenido (mínimo 0)
   const iibbPendiente = Math.max(0, iibbObligacion - iibbRetenido)
 
   let ingresosNetos = 0
   let ivaDebito = 0
   let costoMerca = 0
-  let ivaCredito = 0
+  let ivaCreditoMerca = 0
   let unidades = 0
   let unidadesConCosto = 0
   let unidadesSinCosto = 0
@@ -215,10 +196,13 @@ function calcularRentabilidad(
     } else {
       unidadesConCosto += qty
       costoMerca += costRes.costoSinIva
-      ivaCredito += costRes.ivaCredito
+      ivaCreditoMerca += costRes.ivaCredito
     }
   }
 
+  // 🔥 IVA crédito sobre comisiones ML (Factura A)
+  const ivaCreditoML = (cargosML / 1.21) * 0.21
+  const ivaCredito = ivaCreditoMerca + ivaCreditoML
   const ivaAPagar = ivaDebito - ivaCredito
 
   const gananciaOperativa =
@@ -226,9 +210,7 @@ function calcularRentabilidad(
     bonificacionEnvio + envioCobradoTotal - costoFlexTotal -
     publicidadAmount - gastosVariosAmount
 
-  // 🔥 Ganancia neta ahora descuenta IVA + IIBB pendiente
   const ganancia = gananciaOperativa - ivaAPagar - iibbPendiente
-
   const margenOperativo = ingresosNetos > 0 ? (gananciaOperativa / ingresosNetos) * 100 : 0
   const margen = ingresosNetos > 0 ? (ganancia / ingresosNetos) * 100 : 0
 
@@ -264,15 +246,14 @@ function calcularRentabilidad(
     costoMerca, cargosML, retenciones, bonificacionEnvio,
     envioCobradoTotal, costoFlexTotal,
     publicidad: publicidadAmount, gastosVarios: gastosVariosAmount,
-    ivaDebito, ivaCredito, ivaAPagar,
+    ivaDebito, ivaCredito, ivaCreditoMerca, ivaCreditoML,
+    ivaAPagar,
     iibbTasa, iibbObligacion, iibbRetenido, iibbPendiente,
     gananciaOperativa, ganancia, margen, margenOperativo,
     ventas, unidades, unidadesConCosto, unidadesSinCosto,
     itemsSinCosto: Array.from(itemsSinCostoSet),
-    ticketPromedio,
-    envioCount, flexCount,
-    diasActivos, diasTotales,
-    mejorDiaMonto, mejorDiaFecha,
+    ticketPromedio, envioCount, flexCount,
+    diasActivos, diasTotales, mejorDiaMonto, mejorDiaFecha,
     coberturaCosto, comisionPct, roas,
     comision: cargosML, envios: 0, flexBonif: bonificacionEnvio, iibb: retenciones,
   }
@@ -337,14 +318,9 @@ async function fetchAllManualItems(supabase: any): Promise<ItemRow[]> {
       .from('manual_items')
       .select('seller_sku, cost, iva_rate')
       .range(from, from + PAGE - 1)
-      if (error || !data || data.length === 0) break
+    if (error || !data || data.length === 0) break
     for (const m of data as any[]) {
-      items.push({
-        item_id: `MANUAL-${m.seller_sku}`,
-        seller_sku: m.seller_sku,
-        cost: m.cost,
-        iva_rate: m.iva_rate,
-      })
+      items.push({ item_id: `MANUAL-${m.seller_sku}`, seller_sku: m.seller_sku, cost: m.cost, iva_rate: m.iva_rate })
     }
     if (data.length < PAGE) break
     from += PAGE
@@ -364,10 +340,7 @@ async function fetchAllManualComponents(supabase: any): Promise<Map<string, Manu
     if (error || !data || data.length === 0) break
     for (const c of data as any[]) {
       if (!map.has(c.parent_sku)) map.set(c.parent_sku, [])
-      map.get(c.parent_sku)!.push({
-        component_sku: c.component_sku,
-        quantity: Number(c.quantity ?? 1),
-      })
+      map.get(c.parent_sku)!.push({ component_sku: c.component_sku, quantity: Number(c.quantity ?? 1) })
     }
     if (data.length < PAGE) break
     from += PAGE
@@ -378,9 +351,7 @@ async function fetchAllManualComponents(supabase: any): Promise<Map<string, Manu
 async function fetchAdsTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
   const desdeStr = diaArgentinaFromISO(desde.toISOString())
   const hastaStr = diaArgentinaFromISO(hasta.toISOString())
-  const { data } = await supabase
-    .from('ad_expenses').select('amount')
-    .gte('date', desdeStr).lte('date', hastaStr)
+  const { data } = await supabase.from('ad_expenses').select('amount').gte('date', desdeStr).lte('date', hastaStr)
   if (!data) return 0
   return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
 }
@@ -388,21 +359,13 @@ async function fetchAdsTotal(supabase: any, desde: Date, hasta: Date): Promise<n
 async function fetchQuickExpensesTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
   const desdeStr = diaArgentinaFromISO(desde.toISOString())
   const hastaStr = diaArgentinaFromISO(hasta.toISOString())
-  const { data } = await supabase
-    .from('quick_expenses').select('amount')
-    .gte('date', desdeStr).lte('date', hastaStr)
+  const { data } = await supabase.from('quick_expenses').select('amount').gte('date', desdeStr).lte('date', hastaStr)
   if (!data) return 0
   return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
 }
 
-// 🔥 NUEVO: fetchear tasa IIBB desde tax_config
 async function fetchIIBBTasa(supabase: any): Promise<number> {
-  const { data } = await supabase
-    .from('tax_config')
-    .select('percentage')
-    .eq('type', 'iibb')
-    .eq('active', true)
-    .maybeSingle()
+  const { data } = await supabase.from('tax_config').select('percentage').eq('type', 'iibb').eq('active', true).maybeSingle()
   return data ? Number(data.percentage) : 5
 }
 
@@ -415,25 +378,48 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )
 
+  const ahora = new Date()
   let desdeActual: Date, hastaActual: Date, desdePrev: Date, hastaPrev: Date
   let labelPeriodo: string, labelComparacion: string
-  const ahora = new Date()
 
-  if (period === 'semana') {
-    desdeActual = inicioSemanaArgentina(0); hastaActual = ahora
-    const lapsoMs = hastaActual.getTime() - desdeActual.getTime()
-    desdePrev = inicioSemanaArgentina(-1); hastaPrev = new Date(desdePrev.getTime() + lapsoMs)
-    labelPeriodo = 'esta semana'; labelComparacion = 'vs semana anterior'
+  if (period === 'ayer') {
+    desdeActual = inicioDiaArgentina(-1)
+    hastaActual = inicioDiaArgentina(0)
+    desdePrev = inicioDiaArgentina(-2)
+    hastaPrev = inicioDiaArgentina(-1)
+    labelPeriodo = 'ayer'
+    labelComparacion = 'vs anteayer'
+  } else if (period === '7dias') {
+    desdeActual = inicioDiaArgentina(-7)
+    hastaActual = ahora
+    desdePrev = inicioDiaArgentina(-14)
+    hastaPrev = inicioDiaArgentina(-7)
+    labelPeriodo = 'últimos 7 días'
+    labelComparacion = 'vs 7 días anteriores'
   } else if (period === 'mes') {
-    desdeActual = inicioMesArgentina(0); hastaActual = ahora
+    desdeActual = inicioMesArgentina(0)
+    hastaActual = ahora
     const lapsoMs = hastaActual.getTime() - desdeActual.getTime()
-    desdePrev = inicioMesArgentina(-1); hastaPrev = new Date(desdePrev.getTime() + lapsoMs)
-    labelPeriodo = 'este mes'; labelComparacion = 'vs mes anterior'
+    desdePrev = inicioMesArgentina(-1)
+    hastaPrev = new Date(desdePrev.getTime() + lapsoMs)
+    labelPeriodo = 'este mes'
+    labelComparacion = 'vs mes anterior'
+  } else if (period === '90dias') {
+    desdeActual = inicioDiaArgentina(-90)
+    hastaActual = ahora
+    desdePrev = inicioDiaArgentina(-180)
+    hastaPrev = inicioDiaArgentina(-90)
+    labelPeriodo = 'últimos 90 días'
+    labelComparacion = 'vs 90 días anteriores'
   } else {
-    desdeActual = inicioDiaArgentina(0); hastaActual = ahora
+    // hoy (default)
+    desdeActual = inicioDiaArgentina(0)
+    hastaActual = ahora
     const lapsoMs = hastaActual.getTime() - desdeActual.getTime()
-    desdePrev = inicioDiaArgentina(-1); hastaPrev = new Date(desdePrev.getTime() + lapsoMs)
-    labelPeriodo = 'hoy'; labelComparacion = 'vs ayer'
+    desdePrev = inicioDiaArgentina(-1)
+    hastaPrev = new Date(desdePrev.getTime() + lapsoMs)
+    labelPeriodo = 'hoy'
+    labelComparacion = 'vs ayer'
   }
 
   const [
@@ -441,7 +427,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     publicidadActual, publicidadPrev,
     gastosActual, gastosPrev,
     itemsML, itemsManuales, manualComps,
-    iibbTasa,  // 🔥 NUEVO
+    iibbTasa,
   ] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
@@ -452,7 +438,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     fetchAllItems(supabase),
     fetchAllManualItems(supabase),
     fetchAllManualComponents(supabase),
-    fetchIIBBTasa(supabase),  // 🔥 NUEVO
+    fetchIIBBTasa(supabase),
   ])
 
   const allItems = [...itemsML, ...itemsManuales]
@@ -464,9 +450,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     itemIdToSeller.set(it.item_id, it.seller_sku)
     if (it.seller_sku) {
       const existing = itemsBySku.get(it.seller_sku)
-      if (!existing || (it.cost && !existing.cost)) {
-        itemsBySku.set(it.seller_sku, it)
-      }
+      if (!existing || (it.cost && !existing.cost)) itemsBySku.set(it.seller_sku, it)
     }
     allItemCosts.push({
       seller_sku: it.seller_sku,
@@ -488,14 +472,12 @@ export default async function RentabilidadPage({ searchParams }: Props) {
   const calcActual = calcularRentabilidad(
     actual.orders, actual.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadActual, gastosActual, desdeActual, hastaActual,
-    iibbTasa  // 🔥
+    publicidadActual, gastosActual, desdeActual, hastaActual, iibbTasa
   )
   const calcPrev = calcularRentabilidad(
     previo.orders, previo.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadPrev, gastosPrev, desdePrev, hastaPrev,
-    iibbTasa  // 🔥
+    publicidadPrev, gastosPrev, desdePrev, hastaPrev, iibbTasa
   )
 
   return (
