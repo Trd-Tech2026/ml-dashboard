@@ -44,13 +44,11 @@ export async function GET(request: Request) {
     if (refreshed.access_token) token = refreshed.access_token
   } catch {}
 
-  // Variantes para encontrar el endpoint que tiene "percepciones aproximadas" del mes en curso
   const variants: Record<string, string> = {
-    'A_summary_solo':            `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary?group=ML`,
-    'B_summary_details_sin_doc': `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary/details?group=ML`,
-    'C_summary_details_NC':      `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary/details?group=ML&document_type=CREDIT_NOTE`,
-    'D_period_listado':          `https://api.mercadolibre.com/billing/integration/periods?group=ML&document_type=BILL&limit=3`,
-    'E_monthly_periods':         `https://api.mercadolibre.com/billing/integration/monthly/periods?group=ML&document_type=BILL&limit=3`,
+    'A_perceptions_summary':         `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/perceptions/summary?group=ML`,
+    'B_perceptions_summary_no_group': `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/perceptions/summary`,
+    'C_group_perceptions_details':   `https://api.mercadolibre.com/billing/integration/group/ML/perceptions/details?limit=10`,
+    'D_perceptions_summary_MP':      `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/perceptions/summary?group=MP`,
   }
 
   const results: any = {}
@@ -66,7 +64,7 @@ export async function GET(request: Request) {
         url,
         status,
         body_length: bodyStr.length,
-        body: bodyStr.length > 8000 ? JSON.parse(bodyStr.slice(0, 8000) + '..."}') : body,
+        body: bodyStr.length > 10000 ? JSON.parse(bodyStr.slice(0, 10000) + '..."}') : body,
       }
     } catch (e: any) {
       results[name] = { url, error: e.message }
@@ -75,7 +73,7 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     period_key: periodKey,
-    note: 'Buscando endpoint con "percepciones aproximadas" del mes en curso',
+    note: 'Endpoints específicos de percepciones',
     variants_tested: results,
   })
 }
