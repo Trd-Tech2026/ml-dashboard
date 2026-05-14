@@ -34,6 +34,14 @@ export type FiscalBreakdown = {
   unidadesConCosto: number
   unidadesSinCosto: number
   costoCompleto: boolean
+  // 🆕 Campos nuevos (opcionales para compatibilidad con páginas todavía sin actualizar)
+  ivaCreditoComisionesML?: number
+  ivaCreditoPercepcionML?: number
+  iibbTasa?: number
+  iibbObligacion?: number
+  iibbPercepcionML?: number
+  iibbPendienteDJ?: number
+  gananciasRetenidoML?: number
 }
 
 export type OrderWithItems = {
@@ -134,15 +142,20 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
               const recibidoML = fiscal?.recibidoML ?? Number(o.net_received ?? 0)
               const recibidoNeto = fiscal?.recibidoNeto ?? Number(o.net_received ?? 0)
 
-              // Lo que ML muestra en su panel = total cobrado - cargos ML - retenciones visibles (IIBB + créd/déb)
               const totalSegunML = fiscal
                 ? o.total_amount - fiscal.cargosML - fiscal.impIIBB - fiscal.impCreditosDebitos
                 : recibidoML
 
-              // Hay gastos ocultos si hay bonificación, créd/déb envío o envío cobrado al cliente
               const hayGastosOcultos = fiscal
                 ? (fiscal.bonificacionEnvio > 0 || fiscal.impCreditosDebitosEnvio > 0 || fiscal.envioCobradoCliente > 0)
                 : false
+
+              // 🆕 Flags para mostrar líneas nuevas solo si hay datos
+              const hayIvaComML = (fiscal?.ivaCreditoComisionesML ?? 0) > 0
+              const hayIvaPercML = (fiscal?.ivaCreditoPercepcionML ?? 0) > 0
+              const hayIIBB = (fiscal?.iibbObligacion ?? 0) > 0
+              const hayIIBBPercML = (fiscal?.iibbPercepcionML ?? 0) > 0
+              const hayGanRetML = (fiscal?.gananciasRetenidoML ?? 0) > 0
 
               return (
                 <>
@@ -212,7 +225,6 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                               <div className="vt-fiscal-block">
                                 <div className="vt-fiscal-block-title">OPERATIVO</div>
 
-                                {/* ── Subsección: Lo que muestra ML ── */}
                                 <div className="vt-fiscal-subsection-label">
                                   <span className="vt-subsection-icon">📋</span> Lo que muestra ML
                                 </div>
@@ -266,13 +278,11 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   </>
                                 )}
 
-                                {/* Subtotal ML visible */}
                                 <div className="vt-fiscal-row vt-fin-subtotal-ml">
                                   <span>= Total según ML</span>
                                   <span className="vt-fin-value">{formatARS(totalSegunML)}</span>
                                 </div>
 
-                                {/* ── Subsección: Gastos ocultos ── */}
                                 {hayGastosOcultos && (
                                   <>
                                     <div className="vt-fiscal-subsection-label vt-fiscal-subsection-oculto">
@@ -300,13 +310,11 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   </>
                                 )}
 
-                                {/* Recibido de ML */}
                                 <div className="vt-fiscal-row vt-fin-total">
                                   <span>= Recibido (de ML)</span>
                                   <span className="vt-fin-value">{formatARS(fiscal.recibidoML)}</span>
                                 </div>
 
-                                {/* Costo Flex y Recibido NETO */}
                                 {fiscal.costoFlexEstimado > 0 && (
                                   <>
                                     <div className="vt-fiscal-row vt-fin-deduct vt-fin-oculto">
@@ -321,23 +329,82 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                 )}
                               </div>
 
-                              {/* IVA */}
-                              <div className="vt-fiscal-block">
-                                <div className="vt-fiscal-block-title">IVA (Resp. Inscripto)</div>
-                                <div className="vt-fiscal-row">
-                                  <span>IVA débito (cobrado)</span>
-                                  <span className="vt-fin-value">{formatARS(fiscal.ivaDebito)}</span>
+                              {/* ── COLUMNA CENTRAL: IVA + IIBB + GANANCIAS ── */}
+                              <div className="vt-fiscal-col">
+
+                                {/* IVA */}
+                                <div className="vt-fiscal-block">
+                                  <div className="vt-fiscal-block-title">IVA (Resp. Inscripto)</div>
+                                  <div className="vt-fiscal-row">
+                                    <span>IVA débito (cobrado)</span>
+                                    <span className="vt-fin-value">{formatARS(fiscal.ivaDebito)}</span>
+                                  </div>
+                                  <div className="vt-fiscal-row vt-fin-bonus">
+                                    <span>− IVA crédito mercadería</span>
+                                    <span className="vt-fin-value">−{formatARS(fiscal.ivaCredito)}</span>
+                                  </div>
+                                  {hayIvaComML && (
+                                    <div className="vt-fiscal-row vt-fin-bonus">
+                                      <span>− IVA crédito comisiones ML</span>
+                                      <span className="vt-fin-value">−{formatARS(fiscal.ivaCreditoComisionesML!)}</span>
+                                    </div>
+                                  )}
+                                  {hayIvaPercML && (
+                                    <div className="vt-fiscal-row vt-fin-bonus">
+                                      <span>− IVA crédito Percepción ML</span>
+                                      <span className="vt-fin-value">−{formatARS(fiscal.ivaCreditoPercepcionML!)}</span>
+                                    </div>
+                                  )}
+                                  <div className="vt-fiscal-row vt-fin-total">
+                                    <span>= {fiscal.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}</span>
+                                    <span className={`vt-fin-value ${fiscal.ivaAPagar > 0 ? 'vt-val-neg' : 'vt-val-pos'}`}>
+                                      {formatARSSigned(-fiscal.ivaAPagar)}
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="vt-fiscal-row vt-fin-bonus">
-                                  <span>− IVA crédito (pagado)</span>
-                                  <span className="vt-fin-value">−{formatARS(fiscal.ivaCredito)}</span>
-                                </div>
-                                <div className="vt-fiscal-row vt-fin-total">
-                                  <span>= {fiscal.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}</span>
-                                  <span className={`vt-fin-value ${fiscal.ivaAPagar > 0 ? 'vt-val-neg' : 'vt-val-pos'}`}>
-                                    {formatARSSigned(fiscal.ivaAPagar)}
-                                  </span>
-                                </div>
+
+                                {/* 🆕 IIBB */}
+                                {hayIIBB && (
+                                  <div className="vt-fiscal-block vt-fiscal-block-iibb">
+                                    <div className="vt-fiscal-block-title">IIBB (CM)</div>
+                                    <div className="vt-fiscal-row vt-fin-deduct">
+                                      <span>Obligación ({fiscal.iibbTasa}% s/venta)</span>
+                                      <span className="vt-fin-value vt-val-neg">−{formatARS(fiscal.iibbObligacion!)}</span>
+                                    </div>
+                                    {fiscal.impIIBB > 0 && (
+                                      <div className="vt-fiscal-row vt-fin-bonus">
+                                        <span>+ Retenido MP (SIRCUPA)</span>
+                                        <span className="vt-fin-value">+{formatARS(fiscal.impIIBB)}</span>
+                                      </div>
+                                    )}
+                                    {hayIIBBPercML && (
+                                      <div className="vt-fiscal-row vt-fin-bonus">
+                                        <span>+ Percepción ML mensual</span>
+                                        <span className="vt-fin-value">+{formatARS(fiscal.iibbPercepcionML!)}</span>
+                                      </div>
+                                    )}
+                                    <div className="vt-fiscal-row vt-fin-total">
+                                      <span>= IIBB pendiente DJ</span>
+                                      <span className={`vt-fin-value ${(fiscal.iibbPendienteDJ ?? 0) > 0 ? 'vt-val-neg' : 'vt-val-pos'}`}>
+                                        {formatARSSigned(-(fiscal.iibbPendienteDJ ?? 0))}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* 🆕 Ganancias (informativo) */}
+                                {hayGanRetML && (
+                                  <div className="vt-fiscal-block vt-fiscal-block-info">
+                                    <div className="vt-fiscal-block-title">Pago a cta · Ganancias</div>
+                                    <div className="vt-fiscal-row">
+                                      <span>Retenido por ML</span>
+                                      <span className="vt-fin-value">{formatARS(fiscal.gananciasRetenidoML!)}</span>
+                                    </div>
+                                    <div className="vt-fiscal-info-hint">
+                                      Recupera contra DDJJ anual. No afecta cash del mes.
+                                    </div>
+                                  </div>
+                                )}
                               </div>
 
                               {/* RESULTADO */}
@@ -351,7 +418,6 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   <span>− Costo merca (sin IVA)</span>
                                   <span className="vt-fin-value">−{formatARS(fiscal.costoMerca)}</span>
                                 </div>
-                                {/* Impacto neto ML = cargos + retenciones - bonif */}
                                 {(() => {
                                   const impactoNeto = fiscal.cargosML + fiscal.retenciones - fiscal.bonificacionEnvio
                                   return impactoNeto !== 0 ? (
@@ -395,6 +461,13 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                                   <span>− IVA a pagar</span>
                                   <span className="vt-fin-value">−{formatARS(fiscal.ivaAPagar)}</span>
                                 </div>
+                                {/* 🆕 IIBB pendiente DJ */}
+                                {(fiscal.iibbPendienteDJ ?? 0) > 0 && (
+                                  <div className="vt-fiscal-row vt-fin-deduct">
+                                    <span>− IIBB pendiente DJ</span>
+                                    <span className="vt-fin-value">−{formatARS(fiscal.iibbPendienteDJ!)}</span>
+                                  </div>
+                                )}
                                 <div className="vt-fiscal-row vt-fin-total vt-fiscal-final">
                                   <span>💰 Ganancia neta</span>
                                   <span className={`vt-fin-value ${fiscal.ganancia >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
@@ -449,6 +522,12 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
             ? (fiscal.bonificacionEnvio > 0 || fiscal.impCreditosDebitosEnvio > 0 || fiscal.envioCobradoCliente > 0)
             : false
 
+          const hayIvaComML = (fiscal?.ivaCreditoComisionesML ?? 0) > 0
+          const hayIvaPercML = (fiscal?.ivaCreditoPercepcionML ?? 0) > 0
+          const hayIIBB = (fiscal?.iibbObligacion ?? 0) > 0
+          const hayIIBBPercML = (fiscal?.iibbPercepcionML ?? 0) > 0
+          const hayGanRetML = (fiscal?.gananciasRetenidoML ?? 0) > 0
+
           return (
             <div key={o.order_id} className={`vt-card ${isOpen ? 'vt-card-open' : ''}`}>
               <div className="vt-card-clickable" onClick={() => toggle(o.order_id)}>
@@ -502,7 +581,6 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                       <div className="vt-fiscal-block">
                         <div className="vt-fiscal-block-title">OPERATIVO</div>
 
-                        {/* Lo que muestra ML - mobile */}
                         <div className="vt-fiscal-subsection-label">
                           <span className="vt-subsection-icon">📋</span> Lo que muestra ML
                         </div>
@@ -525,7 +603,6 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                           <span className="vt-fin-value">{formatARS(totalSegunML)}</span>
                         </div>
 
-                        {/* Gastos ocultos - mobile */}
                         {hayGastosOcultos && (
                           <>
                             <div className="vt-fiscal-subsection-label vt-fiscal-subsection-oculto">
@@ -570,6 +647,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                         )}
                       </div>
 
+                      {/* IVA mobile */}
                       <div className="vt-fiscal-block">
                         <div className="vt-fiscal-block-title">IVA</div>
                         <div className="vt-fiscal-row">
@@ -577,17 +655,88 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
                           <span className="vt-fin-value">{formatARS(fiscal.ivaDebito)}</span>
                         </div>
                         <div className="vt-fiscal-row vt-fin-bonus">
-                          <span>− IVA crédito</span>
+                          <span>− IVA crédito merca</span>
                           <span className="vt-fin-value">−{formatARS(fiscal.ivaCredito)}</span>
                         </div>
+                        {hayIvaComML && (
+                          <div className="vt-fiscal-row vt-fin-bonus">
+                            <span>− IVA créd. comisiones ML</span>
+                            <span className="vt-fin-value">−{formatARS(fiscal.ivaCreditoComisionesML!)}</span>
+                          </div>
+                        )}
+                        {hayIvaPercML && (
+                          <div className="vt-fiscal-row vt-fin-bonus">
+                            <span>− IVA créd. Percepción ML</span>
+                            <span className="vt-fin-value">−{formatARS(fiscal.ivaCreditoPercepcionML!)}</span>
+                          </div>
+                        )}
                         <div className="vt-fiscal-row vt-fin-total">
                           <span>= IVA a pagar</span>
-                          <span className="vt-fin-value">{formatARSSigned(fiscal.ivaAPagar)}</span>
+                          <span className="vt-fin-value">{formatARSSigned(-fiscal.ivaAPagar)}</span>
                         </div>
                       </div>
 
+                      {/* 🆕 IIBB mobile */}
+                      {hayIIBB && (
+                        <div className="vt-fiscal-block vt-fiscal-block-iibb">
+                          <div className="vt-fiscal-block-title">IIBB (CM)</div>
+                          <div className="vt-fiscal-row vt-fin-deduct">
+                            <span>Obligación ({fiscal.iibbTasa}%)</span>
+                            <span className="vt-fin-value vt-val-neg">−{formatARS(fiscal.iibbObligacion!)}</span>
+                          </div>
+                          {fiscal.impIIBB > 0 && (
+                            <div className="vt-fiscal-row vt-fin-bonus">
+                              <span>+ Retenido MP</span>
+                              <span className="vt-fin-value">+{formatARS(fiscal.impIIBB)}</span>
+                            </div>
+                          )}
+                          {hayIIBBPercML && (
+                            <div className="vt-fiscal-row vt-fin-bonus">
+                              <span>+ Percepción ML</span>
+                              <span className="vt-fin-value">+{formatARS(fiscal.iibbPercepcionML!)}</span>
+                            </div>
+                          )}
+                          <div className="vt-fiscal-row vt-fin-total">
+                            <span>= Pendiente DJ</span>
+                            <span className={`vt-fin-value ${(fiscal.iibbPendienteDJ ?? 0) > 0 ? 'vt-val-neg' : 'vt-val-pos'}`}>
+                              {formatARSSigned(-(fiscal.iibbPendienteDJ ?? 0))}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 🆕 Ganancias mobile */}
+                      {hayGanRetML && (
+                        <div className="vt-fiscal-block vt-fiscal-block-info">
+                          <div className="vt-fiscal-block-title">Pago a cta · Ganancias</div>
+                          <div className="vt-fiscal-row">
+                            <span>Retenido por ML</span>
+                            <span className="vt-fin-value">{formatARS(fiscal.gananciasRetenidoML!)}</span>
+                          </div>
+                          <div className="vt-fiscal-info-hint">
+                            Recupera en DDJJ anual. No afecta cash del mes.
+                          </div>
+                        </div>
+                      )}
+
                       <div className="vt-fiscal-block vt-fiscal-block-result">
                         <div className="vt-fiscal-block-title">RESULTADO</div>
+                        <div className="vt-fiscal-row">
+                          <span>Ganancia operativa</span>
+                          <span className={`vt-fin-value ${fiscal.gananciaOperativa >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
+                            {formatARSSigned(fiscal.gananciaOperativa)}
+                          </span>
+                        </div>
+                        <div className="vt-fiscal-row vt-fin-deduct">
+                          <span>− IVA a pagar</span>
+                          <span className="vt-fin-value">−{formatARS(fiscal.ivaAPagar)}</span>
+                        </div>
+                        {(fiscal.iibbPendienteDJ ?? 0) > 0 && (
+                          <div className="vt-fiscal-row vt-fin-deduct">
+                            <span>− IIBB pendiente DJ</span>
+                            <span className="vt-fin-value">−{formatARS(fiscal.iibbPendienteDJ!)}</span>
+                          </div>
+                        )}
                         <div className="vt-fiscal-row vt-fin-total vt-fiscal-final">
                           <span>💰 Ganancia neta</span>
                           <span className={`vt-fin-value ${fiscal.ganancia >= 0 ? 'vt-val-pos' : 'vt-val-neg'}`}>
@@ -758,6 +907,13 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           display: grid;
           grid-template-columns: 1.2fr 1fr 1.2fr;
           gap: 12px;
+          align-items: start;
+        }
+        /* 🆕 Columna central que apila IVA + IIBB + Ganancias */
+        .vt-fiscal-col {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
         }
         .vt-fiscal-block {
           background: rgba(10, 18, 28, 0.5);
@@ -768,6 +924,27 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
         .vt-fiscal-block-result {
           background: rgba(28, 160, 196, 0.08);
           border-color: rgba(62, 229, 224, 0.25);
+        }
+        /* 🆕 IIBB con color ámbar */
+        .vt-fiscal-block-iibb {
+          background: rgba(10, 18, 28, 0.5);
+          border-color: rgba(251, 191, 36, 0.25);
+        }
+        .vt-fiscal-block-iibb .vt-fiscal-block-title { color: #fbbf24; }
+        /* 🆕 Ganancias info con color violeta */
+        .vt-fiscal-block-info {
+          background: rgba(10, 18, 28, 0.4);
+          border-color: rgba(167, 139, 250, 0.25);
+        }
+        .vt-fiscal-block-info .vt-fiscal-block-title { color: #a78bfa; }
+        .vt-fiscal-info-hint {
+          margin-top: 8px;
+          padding-top: 8px;
+          border-top: 1px dashed rgba(167, 139, 250, 0.15);
+          font-size: 10px;
+          color: var(--text-muted);
+          font-style: italic;
+          line-height: 1.4;
         }
         .vt-fiscal-block-title {
           font-size: 10px;
@@ -815,7 +992,6 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-weight: 500;
         }
 
-        /* Subsección labels */
         .vt-fiscal-subsection-label {
           display: flex;
           align-items: center;
@@ -843,7 +1019,6 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           font-size: 11px;
         }
 
-        /* Subtotal ML visible */
         .vt-fin-subtotal-ml {
           border-top: 1px dashed rgba(62, 229, 224, 0.2);
           margin-top: 4px;
@@ -1006,6 +1181,7 @@ export default function VentasTabla({ ordenes, mostrarHora = true, timeZone = 'A
           .vt-card-item-title { flex: 1; font-size: 13px; line-height: 1.3; }
           .vt-card-item-meta { justify-content: space-between; margin-top: 4px; font-size: 12px; color: var(--text-muted); }
           .vt-fiscal-grid { display: block; }
+          .vt-fiscal-col { display: contents; }
           .vt-fiscal-block { margin-top: 10px; }
         }
       `}</style>

@@ -6,6 +6,11 @@ import {
   type ItemCostInfo,
   type ManualComponent,
 } from '../lib/combos'
+import {
+  getCachedOrFetch,
+  currentPeriodKey,
+  type PerceptionBreakdown,
+} from '../lib/ml-billing'
 
 export const dynamic = 'force-dynamic'
 
@@ -116,6 +121,11 @@ export type Calculo = {
   envios: number
   flexBonif: number
   iibb: number
+  // === Percepciones mensuales de ML (Billing API) ===
+  ivaCreditoPercepcionML: number              // Percepción IVA Régimen General (recuperable)
+  iibbRetenidoBilling: number                  // Retenciones IIBB ML mensuales (pago a cuenta)
+  iibbBreakdownBilling: Record<string, number> // IIBB por jurisdicción del billing
+  gananciasRetenido: number                    // INFORMATIVO: pago a cta Ganancias anual
 }
 
 function diaArgentinaFromISO(iso: string): string {
@@ -123,6 +133,41 @@ function diaArgentinaFromISO(iso: string): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(d)
+}
+
+/**
+ * Prorratea un monto mensual al subperíodo solicitado.
+ * Si el período cubre TODO el mes, devuelve el monto completo.
+ * Si cubre solo X días del mes, devuelve la fracción correspondiente.
+ *
+ * Ejemplo: si el mes tiene $30 de percepción y el período es "hoy" (1 día),
+ * devuelve $1. Aproximación pragmática: las percepciones mensuales se
+ * distribuyen uniformemente entre los días del mes.
+ */
+function prorratearPorPeriodo(montoMensual: number, desde: Date, hasta: Date): number {
+  if (montoMensual === 0) return 0
+
+  const ms = hasta.getTime() - desde.getTime()
+  const diasPeriodo = Math.max(1, Math.ceil(ms / (24 * 60 * 60 * 1000)))
+
+  const mesEnCurso = desde.getMonth()
+  const yearEnCurso = desde.getFullYear()
+  const diasDelMes = new Date(yearEnCurso, mesEnCurso + 1, 0).getDate()
+
+  if (diasPeriodo >= diasDelMes) return montoMensual
+  return montoMensual * (diasPeriodo / diasDelMes)
+}
+
+function prorratearJurisdicciones(
+  porJurisd: Record<string, number>,
+  desde: Date,
+  hasta: Date
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [j, v] of Object.entries(porJurisd)) {
+    out[j] = prorratearPorPeriodo(v, desde, hasta)
+  }
+  return out
 }
 
 function calcularRentabilidad(
@@ -137,7 +182,8 @@ function calcularRentabilidad(
   gastosVariosAmount: number,
   desde: Date,
   hasta: Date,
-  iibbTasa: number
+  iibbTasa: number,
+  billingBreakdown: PerceptionBreakdown | null
 ): Calculo {
   const paid = orders.filter(o => o.status === 'paid')
   const paidIds = new Set(paid.map(o => String(o.order_id)))
@@ -149,7 +195,16 @@ function calcularRentabilidad(
   const envioCobradoTotal = paid.reduce((s, o) => s + Number(o.envio_cobrado_cliente ?? 0), 0)
   const costoFlexTotal = paid.reduce((s, o) => s + Number(o.costo_flex_estimado ?? 0), 0)
 
-  const iibbRetenido = paid.reduce((s, o) => s + Number(o.imp_iibb_total ?? 0), 0)
+  const iibbRetenidoMP = paid.reduce((s, o) => s + Number(o.imp_iibb_total ?? 0), 0)
+
+  // 🆕 IIBB retenido por ML del Billing API (mensual, prorrateado al subperíodo)
+  const iibbRetenidoBilling = prorratearPorPeriodo(
+    billingBreakdown?.iibb_pago_a_cuenta_total ?? 0,
+    desde,
+    hasta
+  )
+
+  const iibbRetenido = iibbRetenidoMP + iibbRetenidoBilling
   const iibbObligacion = facturacion * (iibbTasa / 100)
   const iibbPendiente = Math.max(0, iibbObligacion - iibbRetenido)
 
@@ -202,8 +257,16 @@ function calcularRentabilidad(
 
   // 🔥 IVA crédito sobre comisiones ML (Factura A)
   const ivaCreditoML = (cargosML / 1.21) * 0.21
-  const ivaCredito = ivaCreditoMerca + ivaCreditoML
-  const ivaAPagar = ivaDebito - ivaCredito
+
+  // 🆕 IVA crédito por percepción ML del Billing API (mensual, prorrateado)
+  const ivaCreditoPercepcionML = prorratearPorPeriodo(
+    billingBreakdown?.iva_credito_fiscal ?? 0,
+    desde,
+    hasta
+  )
+
+  const ivaCredito = ivaCreditoMerca + ivaCreditoML + ivaCreditoPercepcionML
+  const ivaAPagar = Math.max(0, ivaDebito - ivaCredito)
 
   const gananciaOperativa =
     ingresosNetos - costoMerca - cargosML - retenciones +
@@ -241,6 +304,18 @@ function calcularRentabilidad(
   const comisionPct = facturacion > 0 ? (cargosML / facturacion) * 100 : 0
   const roas = publicidadAmount > 0 ? facturacion / publicidadAmount : 0
 
+  // 🆕 Jurisdicciones de IIBB del billing, prorrateadas
+  const iibbBreakdownBilling = prorratearJurisdicciones(
+    billingBreakdown?.iibb_por_jurisdiccion ?? {},
+    desde, hasta
+  )
+
+  // 🆕 Ganancias retenido (informativo, no afecta cash neto)
+  const gananciasRetenido = prorratearPorPeriodo(
+    billingBreakdown?.ganancias_pago_a_cuenta ?? 0,
+    desde, hasta
+  )
+
   return {
     facturacion, ingresosNetos,
     costoMerca, cargosML, retenciones, bonificacionEnvio,
@@ -256,6 +331,11 @@ function calcularRentabilidad(
     diasActivos, diasTotales, mejorDiaMonto, mejorDiaFecha,
     coberturaCosto, comisionPct, roas,
     comision: cargosML, envios: 0, flexBonif: bonificacionEnvio, iibb: retenciones,
+    // 🆕 Campos nuevos del billing mensual
+    ivaCreditoPercepcionML,
+    iibbRetenidoBilling,
+    iibbBreakdownBilling,
+    gananciasRetenido,
   }
 }
 
@@ -369,6 +449,41 @@ async function fetchIIBBTasa(supabase: any): Promise<number> {
   return data ? Number(data.percentage) : 5
 }
 
+/**
+ * Trae el breakdown de percepciones mensuales del mes en curso.
+ * Si falla por cualquier razón (sin token, ML no responde, etc), devuelve null
+ * y el dashboard sigue funcionando como antes (graceful fallback).
+ */
+async function fetchBillingBreakdown(supabase: any, hastaActual: Date): Promise<PerceptionBreakdown | null> {
+  try {
+    const periodKeyActual = currentPeriodKey()
+    const desdeMesActual = new Date(periodKeyActual + 'T00:00:00-03:00')
+
+    // Solo traer billing si el período toca días del mes en curso
+    if (hastaActual < desdeMesActual) return null
+
+    const { data: tokenData } = await supabase
+      .from('ml_tokens')
+      .select('*')
+      .neq('access_token', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (!tokenData) return null
+
+    return await getCachedOrFetch(
+      supabase,
+      tokenData.access_token,
+      periodKeyActual,
+      false  // sin force refresh, usar cache si está fresco
+    )
+  } catch (e) {
+    console.error('Error trayendo billing breakdown:', e)
+    return null
+  }
+}
+
 export default async function RentabilidadPage({ searchParams }: Props) {
   const params = await searchParams
   const period = params.period ?? 'hoy'
@@ -428,6 +543,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     gastosActual, gastosPrev,
     itemsML, itemsManuales, manualComps,
     iibbTasa,
+    billingBreakdown,
   ] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
@@ -439,6 +555,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     fetchAllManualItems(supabase),
     fetchAllManualComponents(supabase),
     fetchIIBBTasa(supabase),
+    fetchBillingBreakdown(supabase, hastaActual),
   ])
 
   const allItems = [...itemsML, ...itemsManuales]
@@ -472,12 +589,14 @@ export default async function RentabilidadPage({ searchParams }: Props) {
   const calcActual = calcularRentabilidad(
     actual.orders, actual.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadActual, gastosActual, desdeActual, hastaActual, iibbTasa
+    publicidadActual, gastosActual, desdeActual, hastaActual, iibbTasa,
+    billingBreakdown
   )
   const calcPrev = calcularRentabilidad(
     previo.orders, previo.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadPrev, gastosPrev, desdePrev, hastaPrev, iibbTasa
+    publicidadPrev, gastosPrev, desdePrev, hastaPrev, iibbTasa,
+    null  // el período previo no necesita billing (es mes anterior)
   )
 
   return (

@@ -1,4 +1,4 @@
-// v3 - Hoy/Ayer/Históricas tabs + IVA crédito ML
+// v4 - Hoy/Ayer/Históricas tabs + IVA crédito ML + Percepciones billing mensual
 'use client'
 
 import { useState } from 'react'
@@ -45,6 +45,7 @@ export default function RentabilidadView({
   const [calcOpen, setCalcOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [activeTab, setActiveTab] = useState<'metricas' | 'insights'>('metricas')
+  const [iibbDetalleOpen, setIibbDetalleOpen] = useState(false)
 
   const isHistoricas = HISTORICAS_PERIODS.includes(period)
 
@@ -110,6 +111,12 @@ export default function RentabilidadView({
         day: 'numeric', month: 'short', timeZone: TZ
       })
     : '—'
+
+  // Retención IIBB de MP (lo que ya teníamos antes) vs Billing ML (nuevo)
+  const iibbRetenidoMP = calcActual.iibbRetenido - calcActual.iibbRetenidoBilling
+  const jurisdiccionesBilling = Object.entries(calcActual.iibbBreakdownBilling ?? {})
+    .filter(([, monto]) => monto > 0)
+    .sort(([, a], [, b]) => b - a)
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
     background: 'transparent',
@@ -359,7 +366,7 @@ export default function RentabilidadView({
               </div>
             </div>
 
-            {/* IVA + IIBB apilados */}
+            {/* IVA + IIBB + Ganancias apilados */}
             <div className="bk-col-right">
               {/* IVA */}
               <div className="bk-card">
@@ -377,6 +384,12 @@ export default function RentabilidadView({
                     <span className="bk-label">IVA crédito comisiones ML</span>
                     <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCreditoML)}</span>
                   </div>
+                  {calcActual.ivaCreditoPercepcionML > 0 && (
+                    <div className="bk-row bk-row-iva">
+                      <span className="bk-label">IVA crédito Percepción ML</span>
+                      <span className="bk-value bk-value-pos">−{formatARS(calcActual.ivaCreditoPercepcionML)}</span>
+                    </div>
+                  )}
                   <div className="bk-row bk-row-total bk-row-iva">
                     <span className="bk-label-total">
                       = {calcActual.ivaAPagar >= 0 ? 'IVA a pagar' : 'Saldo a favor'}
@@ -388,6 +401,9 @@ export default function RentabilidadView({
                 </div>
                 <div className="bk-card-hint">
                   ML emite Factura A por sus comisiones — ese IVA es crédito fiscal reclamable.
+                  {calcActual.ivaCreditoPercepcionML > 0 && (
+                    <> La Percepción IVA de la factura mensual también es crédito fiscal.</>
+                  )}
                 </div>
               </div>
 
@@ -400,9 +416,34 @@ export default function RentabilidadView({
                     <span className="bk-value bk-value-neg">−{formatARS(calcActual.iibbObligacion)}</span>
                   </div>
                   <div className="bk-row bk-row-iva">
-                    <span className="bk-label">Ya retenido por ML</span>
-                    <span className="bk-value bk-value-pos">+{formatARS(calcActual.iibbRetenido)}</span>
+                    <span className="bk-label">Retenido MP (por venta)</span>
+                    <span className="bk-value bk-value-pos">+{formatARS(iibbRetenidoMP)}</span>
                   </div>
+                  {calcActual.iibbRetenidoBilling > 0 && (
+                    <>
+                      <div className="bk-row bk-row-iva">
+                        <span className="bk-label">
+                          Percepción ML mensual
+                          {jurisdiccionesBilling.length > 0 && (
+                            <button
+                              type="button"
+                              className="link-btn link-btn-inline"
+                              onClick={() => setIibbDetalleOpen(v => !v)}
+                            >
+                              {iibbDetalleOpen ? 'ocultar' : 'detalle'}
+                            </button>
+                          )}
+                        </span>
+                        <span className="bk-value bk-value-pos">+{formatARS(calcActual.iibbRetenidoBilling)}</span>
+                      </div>
+                      {iibbDetalleOpen && jurisdiccionesBilling.map(([jurisdiccion, monto]) => (
+                        <div key={jurisdiccion} className="bk-row bk-row-iva bk-row-sub">
+                          <span className="bk-label bk-label-sub">• {jurisdiccion}</span>
+                          <span className="bk-value bk-value-sub">+{formatARS(monto)}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
                   <div className="bk-row bk-row-total bk-row-iva">
                     <span className="bk-label-total">= IIBB pendiente DJ</span>
                     <span className={`bk-value-total ${calcActual.iibbPendiente > 0 ? 'bk-value-neg' : 'bk-value-pos'}`}>
@@ -411,9 +452,29 @@ export default function RentabilidadView({
                   </div>
                 </div>
                 <div className="bk-card-hint">
-                  Lo retenido por ML es un pago a cuenta. El resto lo declarás en la DJ mensual de IIBB.
+                  MP retiene en cada venta (SIRCUPA).
+                  {calcActual.iibbRetenidoBilling > 0 && (
+                    <> ML aplica percepción en la factura mensual.</>
+                  )}
+                  {' '}Ambas son pago a cuenta del IIBB que declarás en la DJ.
                 </div>
               </div>
+
+              {/* GANANCIAS (informativo, solo si hay retenido) */}
+              {calcActual.gananciasRetenido > 0 && (
+                <div className="bk-card bk-card-info">
+                  <div className="bk-card-title">Pagos a cuenta · Ganancias</div>
+                  <div className="bk-list">
+                    <div className="bk-row bk-row-iva">
+                      <span className="bk-label">Retenido por ML este período</span>
+                      <span className="bk-value">{formatARS(calcActual.gananciasRetenido)}</span>
+                    </div>
+                  </div>
+                  <div className="bk-card-hint">
+                    Pago a cuenta del Impuesto a las Ganancias anual. <strong>No afecta el cash neto del mes</strong> — lo recuperás contra tu DDJJ de Ganancias del ejercicio.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -582,12 +643,19 @@ export default function RentabilidadView({
         }
         .bk-card-iibb { background: rgba(10, 18, 28, 0.6); border-color: rgba(251, 191, 36, 0.2); }
         .bk-card-iibb .bk-card-title { color: #fbbf24; }
+        /* Card informativo (Ganancias) */
+        .bk-card-info { background: rgba(10, 18, 28, 0.4); border-color: rgba(167, 139, 250, 0.25); }
+        .bk-card-info .bk-card-title { color: #a78bfa; }
         .bk-card-title { font-size: 11px; letter-spacing: 1.2px; color: var(--text-muted); font-weight: 500; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid rgba(62, 229, 224, 0.08); }
         .bk-list { display: flex; flex-direction: column; gap: 9px; }
         .bk-row { display: grid; grid-template-columns: 1fr auto 90px; align-items: baseline; gap: 16px; }
         .bk-row-hidden { color: #fbbf24; }
         .bk-row-hidden .bk-label, .bk-row-hidden .bk-value { color: #fbbf24; font-style: italic; }
         .bk-row-iva { grid-template-columns: 1fr auto; }
+        /* Sub-fila para desglose de jurisdicciones */
+        .bk-row-sub { padding-left: 14px; opacity: 0.85; }
+        .bk-label-sub { font-size: 11px; color: var(--text-muted); }
+        .bk-value-sub { font-size: 11px; color: var(--text-muted); font-weight: 400; }
         .bk-label { font-size: 13px; color: var(--text-secondary); }
         .bk-value { font-size: 14px; font-weight: 500; color: #cbd5e1; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
         .bk-value-pos { color: #3ee5e0; }
@@ -597,8 +665,10 @@ export default function RentabilidadView({
         .bk-label-total { font-size: 13px; color: var(--text-primary); font-weight: 500; }
         .bk-value-total { font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; color: #cbd5e1; }
         .bk-card-hint { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(62, 229, 224, 0.08); font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+        .bk-card-hint strong { color: var(--text-secondary); }
         .link-btn { background: transparent; border: none; color: #1ca0c4; padding: 0; font-family: inherit; font-size: 10px; cursor: pointer; text-decoration: underline; }
         .link-btn:hover { color: #3ee5e0; }
+        .link-btn-inline { margin-left: 8px; font-size: 10px; }
 
         .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
         .mini-card { background: rgba(13, 77, 110, 0.18); border: 1px solid rgba(62, 229, 224, 0.1); border-radius: 10px; padding: 12px 14px; }

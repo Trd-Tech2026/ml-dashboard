@@ -8,6 +8,11 @@ import {
   type ItemCostInfo,
   type ManualComponent,
 } from '../../lib/combos'
+import {
+  getCachedOrFetch,
+  currentPeriodKey,
+  type PerceptionBreakdown,
+} from '../../lib/ml-billing'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,7 +77,10 @@ function calcularFiscalOrden(
   itemsBySku: Map<string, any>,
   costsBySku: Map<string, ItemCostInfo>,
   individualesByLast: Map<string, ItemCostInfo[]>,
-  manualComps: Map<string, ManualComponent[]>
+  manualComps: Map<string, ManualComponent[]>,
+  billing: PerceptionBreakdown | null,
+  facturacionMes: number,
+  iibbTasa: number
 ) {
   let ingresosNetos = 0, costoMerca = 0, ivaDebito = 0, ivaCredito = 0
   let unidadesConCosto = 0, unidadesSinCosto = 0
@@ -120,27 +128,40 @@ function calcularFiscalOrden(
   const impCreditosDebitosEnvio = Number(o.imp_creditos_debitos_envio ?? 0)
   const impIIBB = Number(o.imp_iibb_total ?? 0)
   const bonificacionEnvio = Number(o.bonificacion_envio ?? o.discounts ?? 0)
-
-  // 🔥 NUEVOS CAMPOS
   const envioCobradoCliente = Number(o.envio_cobrado_cliente ?? 0)
   const costoFlexEstimado = Number(o.costo_flex_estimado ?? 0)
   const totalBruto = Number(o.total_amount ?? 0)
 
-  // 🔥 Recibido ML: lo que ML te transfiere literalmente
-  const recibidoML = totalBruto + envioCobradoCliente - cargosML - retenciones + bonificacionEnvio
+  // 🆕 IVA crédito por comisiones ML
+  const ivaCreditoComisionesML = (cargosML / 1.21) * 0.21
 
-  // 🔥 Recibido neto: lo que queda después del costo Flex
+  // 🆕 Prorrateo de percepciones del billing.
+  // NOTA: en históricas el ratio se calcula sobre la facturación del MES EN CURSO.
+  // Para ventas de meses anteriores el prorrateo es aproximado (limitación de Opción A).
+  const ratio = facturacionMes > 0 ? totalBruto / facturacionMes : 0
+  const ivaCreditoPercepcionML = (billing?.iva_credito_fiscal ?? 0) * ratio
+  const iibbPercepcionML = (billing?.iibb_pago_a_cuenta_total ?? 0) * ratio
+  const gananciasRetenidoML = (billing?.ganancias_pago_a_cuenta ?? 0) * ratio
+
+  const ivaCreditoTotal = ivaCredito + ivaCreditoComisionesML + ivaCreditoPercepcionML
+  const ivaAPagar = Math.max(0, ivaDebito - ivaCreditoTotal)
+
+  const iibbObligacion = totalBruto * (iibbTasa / 100)
+  const iibbRetenidoTotal = impIIBB + iibbPercepcionML
+  const iibbPendienteDJ = Math.max(0, iibbObligacion - iibbRetenidoTotal)
+
+  const recibidoML = totalBruto + envioCobradoCliente - cargosML - retenciones + bonificacionEnvio
   const recibidoNeto = recibidoML - costoFlexEstimado
 
-  const ivaAPagar = ivaDebito - ivaCredito
   const gananciaOperativa = ingresosNetos - costoMerca - cargosML - retenciones + bonificacionEnvio - costoFlexEstimado
-  const ganancia = gananciaOperativa - ivaAPagar
+  const ganancia = gananciaOperativa - ivaAPagar - iibbPendienteDJ
+
   const margen = totalBruto > 0 && unidadesSinCosto === 0 && unidadesConCosto > 0
     ? (ganancia / totalBruto) * 100 : null
 
   return {
     ingresosNetos, costoMerca,
-    ivaDebito, ivaCredito, ivaAPagar,
+    ivaDebito, ivaCredito, ivaCreditoComisionesML, ivaCreditoPercepcionML, ivaAPagar,
     cargosML, cargosComision, cargosCostoFijo, cargosFinanciacion,
     retenciones, impCreditosDebitos, impCreditosDebitosEnvio, impIIBB,
     bonificacionEnvio,
@@ -152,7 +173,50 @@ function calcularFiscalOrden(
     unidadesConCosto, unidadesSinCosto,
     costoCompleto: unidadesSinCosto === 0 && unidadesConCosto > 0,
     fuentesCostos: Array.from(fuentesCostos),
+    iibbTasa,
+    iibbObligacion,
+    iibbPercepcionML,
+    iibbPendienteDJ,
+    gananciasRetenidoML,
   }
+}
+
+async function fetchBillingBreakdown(supabase: any): Promise<PerceptionBreakdown | null> {
+  try {
+    const { data: tokenData } = await supabase
+      .from('ml_tokens')
+      .select('*')
+      .neq('access_token', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!tokenData) return null
+    return await getCachedOrFetch(supabase, tokenData.access_token, currentPeriodKey(), false)
+  } catch (e) {
+    console.error('Error trayendo billing breakdown:', e)
+    return null
+  }
+}
+
+async function fetchIIBBTasa(supabase: any): Promise<number> {
+  const { data } = await supabase
+    .from('tax_config')
+    .select('percentage')
+    .eq('type', 'iibb')
+    .eq('active', true)
+    .maybeSingle()
+  return data ? Number(data.percentage) : 5
+}
+
+async function fetchFacturacionMes(supabase: any): Promise<number> {
+  const inicioMes = inicioMesArgentinaISO(0)
+  const { data } = await supabase
+    .from('orders')
+    .select('total_amount')
+    .eq('status', 'paid')
+    .gte('date_created', inicioMes)
+  if (!data) return 0
+  return (data as any[]).reduce((s, o) => s + Number(o.total_amount ?? 0), 0)
 }
 
 export default async function Historicas({ searchParams }: Props) {
@@ -194,12 +258,16 @@ export default async function Historicas({ searchParams }: Props) {
     labelComparacion = `vs ${dias} días previos`
   }
 
-  const [todasOrdenes, prevOrdenes, allItemsRes, manualItemsRes, manualCompsRes] = await Promise.all([
+  // 🆕 Cargar billing + facturación mensual + tasa IIBB en paralelo
+  const [todasOrdenes, prevOrdenes, allItemsRes, manualItemsRes, manualCompsRes, billing, iibbTasa, facturacionMes] = await Promise.all([
     fetchKpisRango(supabase, desdeISO, hastaISOActual),
     fetchKpisRango(supabase, desdePreviaISO, hastaPreviaISO),
     supabase.from('items').select('item_id, seller_sku, cost, iva_rate'),
     supabase.from('manual_items').select('seller_sku, cost, iva_rate'),
     supabase.from('product_components').select('parent_sku, component_sku, quantity'),
+    fetchBillingBreakdown(supabase),
+    fetchIIBBTasa(supabase),
+    fetchFacturacionMes(supabase),
   ])
 
   const allItemsML = (allItemsRes.data ?? []) as any[]
@@ -283,7 +351,8 @@ export default async function Historicas({ searchParams }: Props) {
   const ordenes: OrderEnriched[] = (recientesRaw ?? []).map((o: any) => {
     const items = Array.isArray(o.order_items) ? o.order_items : []
     const fiscal = calcularFiscalOrden(
-      o, items, itemIdToSeller, itemsBySku, costsBySku, individualesByLast, manualComps
+      o, items, itemIdToSeller, itemsBySku, costsBySku, individualesByLast, manualComps,
+      billing, facturacionMes, iibbTasa
     )
     return {
       order_id: o.order_id,
@@ -321,7 +390,8 @@ export default async function Historicas({ searchParams }: Props) {
   const ordenesFullTabla: OrderEnriched[] = (recientesFullRaw ?? []).map((o: any) => {
     const items = Array.isArray(o.order_items) ? o.order_items : []
     const fiscal = calcularFiscalOrden(
-      o, items, itemIdToSeller, itemsBySku, costsBySku, individualesByLast, manualComps
+      o, items, itemIdToSeller, itemsBySku, costsBySku, individualesByLast, manualComps,
+      billing, facturacionMes, iibbTasa
     )
     return {
       order_id: o.order_id,
