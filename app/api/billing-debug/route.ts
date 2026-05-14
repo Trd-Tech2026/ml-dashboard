@@ -39,59 +39,29 @@ export async function GET(request: Request) {
   }
 
   let token = tokenData.access_token
-  const userId = tokenData.user_id
 
-  // Refresh proactivo del token (igual que el sync)
+  // Refresh proactivo
   try {
     const refreshed = await refreshToken(tokenData.refresh_token)
-    if (refreshed.access_token) {
-      token = refreshed.access_token
-      // No vamos a guardar el nuevo refresh_token acá para no romper nada,
-      // solo usamos el access_token nuevo en memoria
-    }
-  } catch (e) {
-    // continúa con el token existente
+    if (refreshed.access_token) token = refreshed.access_token
+  } catch { /* sigue con el actual */ }
+
+  // El endpoint correcto con el parámetro que faltaba
+  const url = `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary/details?group=ML&document_type=BILL`
+
+  try {
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const status = resp.status
+    const body = await resp.json()
+    return NextResponse.json({
+      period_key: periodKey,
+      url,
+      status,
+      body,
+    })
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message, url }, { status: 500 })
   }
-
-  // Variantes del endpoint para probar
-  const variants: Record<string, string> = {
-    'A_codigo_actual': `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary/details?group=ML`,
-    'B_group_period_details': `https://api.mercadolibre.com/billing/integration/group/ML/period/key/${periodKey}/details?limit=10`,
-    'C_group_period_summary': `https://api.mercadolibre.com/billing/integration/group/ML/period/key/${periodKey}/summary`,
-    'D_list_periods': `https://api.mercadolibre.com/billing/integration/group/ML/periods?limit=5`,
-    'E_user_period_details': `https://api.mercadolibre.com/users/${userId}/billing_info/periods/${periodKey}/details?group=ML&limit=10`,
-    'F_billing_periods_user': `https://api.mercadolibre.com/billing/integration/group/ML/periods?site_id=MLA`,
-  }
-
-  const results: any = {}
-
-  for (const [name, url] of Object.entries(variants)) {
-    try {
-      const resp = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const status = resp.status
-      let body
-      try {
-        body = await resp.json()
-      } catch {
-        body = await resp.text()
-      }
-      // Truncar respuestas largas para no romper el JSON
-      const bodyStr = JSON.stringify(body)
-      const truncated = bodyStr.length > 5000
-        ? JSON.parse(bodyStr.slice(0, 5000) + '..."}')
-        : body
-      results[name] = { url, status, body: truncated, body_length: bodyStr.length }
-    } catch (e: any) {
-      results[name] = { url, error: e.message }
-    }
-  }
-
-  return NextResponse.json({
-    period_key: periodKey,
-    token_user_id: userId,
-    token_preview: token?.slice(0, 20) + '...',
-    variants_tested: results,
-  }, { status: 200 })
 }
