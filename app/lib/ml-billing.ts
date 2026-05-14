@@ -1,122 +1,178 @@
-// app/lib/ml-billing.ts
-//
-// Cliente del Billing API de Mercado Libre.
-// Captura percepciones mensuales (IVA, IIBB por jurisdicción, Ganancias)
-// que NO aparecen en los charges_details de MP por payment.
+/**
+ * Cliente del Billing API de Mercado Libre.
+ *
+ * Endpoint: GET /billing/integration/periods/key/{key}/summary/details
+ *           ?group=ML&document_type=BILL
+ *
+ * Recupera percepciones impositivas (IVA, IIBB por jurisdicción, Ganancias)
+ * del período mensual de facturación y las agrega en un breakdown manejable.
+ *
+ * Caching:
+ * - Período cerrado: cache eterno
+ * - Período en curso: cache de 24 hs
+ *
+ * IMPORTANTE: El billing API tiene rate limit de 1 query/día/usuario.
+ * Por eso siempre que se pueda, usar el cache.
+ */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-// =============================================================================
-// Mapeo de códigos de percepción → categoría estructurada
-// =============================================================================
-// Estos códigos coinciden con los nombres de archivo del reporte ZIP de ML.
-
-type PerceptionMeta = {
-  label: string
-  tipo: 'IVA' | 'Ganancias' | 'IIBB'
-  jurisdiccion: string
-  naturaleza:
-    | 'credito_fiscal_iva'
-    | 'pago_a_cuenta_ganancias'
-    | 'pago_a_cuenta_iibb'
-}
-
-export const PERCEPTION_CODES: Record<string, PerceptionMeta> = {
-  // IVA Nacional
-  CIVA:   { label: 'Percepción IVA Régimen General',          tipo: 'IVA',       jurisdiccion: 'Nacional',     naturaleza: 'credito_fiscal_iva' },
-  // Ganancias Nacional (RG AFIP régimen especial)
-  CIRE:   { label: 'Percepción Ganancias Régimen Especial',   tipo: 'Ganancias', jurisdiccion: 'Nacional',     naturaleza: 'pago_a_cuenta_ganancias' },
-  // IIBB CABA
-  IBCF:   { label: 'Percepción IIBB CABA s/cargos',           tipo: 'IIBB',      jurisdiccion: 'CABA',         naturaleza: 'pago_a_cuenta_iibb' },
-  IBCFME: { label: 'Percepción IIBB CABA s/envíos',           tipo: 'IIBB',      jurisdiccion: 'CABA',         naturaleza: 'pago_a_cuenta_iibb' },
-  CGMV:   { label: 'Percepción IIBB CABA s/venta a comp CABA',tipo: 'IIBB',      jurisdiccion: 'CABA',         naturaleza: 'pago_a_cuenta_iibb' },
-  // IIBB Buenos Aires
-  IIBB:   { label: 'Percepción IIBB Buenos Aires s/cargos',   tipo: 'IIBB',      jurisdiccion: 'Buenos Aires', naturaleza: 'pago_a_cuenta_iibb' },
-  IIBBME: { label: 'Percepción IIBB Buenos Aires s/envíos',   tipo: 'IIBB',      jurisdiccion: 'Buenos Aires', naturaleza: 'pago_a_cuenta_iibb' },
-  // IIBB otras provincias
-  IBCO:   { label: 'Percepción IIBB Corrientes',              tipo: 'IIBB',      jurisdiccion: 'Corrientes',   naturaleza: 'pago_a_cuenta_iibb' },
-  IBLP:   { label: 'Percepción IIBB La Pampa',                tipo: 'IIBB',      jurisdiccion: 'La Pampa',     naturaleza: 'pago_a_cuenta_iibb' },
-  IBTU:   { label: 'Percepción IIBB Tucumán s/cargos',        tipo: 'IIBB',      jurisdiccion: 'Tucumán',      naturaleza: 'pago_a_cuenta_iibb' },
-  CBTUPP: { label: 'Percepción IIBB Tucumán s/envíos',        tipo: 'IIBB',      jurisdiccion: 'Tucumán',      naturaleza: 'pago_a_cuenta_iibb' },
-  CIBT:   { label: 'Percepción IIBB Tucumán s/venta a comp Tuc.',tipo: 'IIBB',   jurisdiccion: 'Tucumán',      naturaleza: 'pago_a_cuenta_iibb' },
-}
-
-// Reglas de clasificación por substring del label.
-// Orden CRÍTICO: las reglas más específicas (con subtipo "venta"/"envíos") deben
-// estar antes que las genéricas, para que un label como
-// "Percepción IIBB CABA s/envíos" matchee IBCFME y no IBCF.
-const LABEL_RULES: Array<{ jurisdiccion: string; subtipo?: string; code: string }> = [
-  { jurisdiccion: 'IVA',          code: 'CIVA' },
-  { jurisdiccion: 'Ganancias',    code: 'CIRE' },
-  // CABA — específicos primero
-  { jurisdiccion: 'CABA',         subtipo: 'venta',  code: 'CGMV' },
-  { jurisdiccion: 'CABA',         subtipo: 'envío',  code: 'IBCFME' },
-  { jurisdiccion: 'CABA',                            code: 'IBCF' },
-  // Buenos Aires
-  { jurisdiccion: 'Buenos Aires', subtipo: 'envío',  code: 'IIBBME' },
-  { jurisdiccion: 'Buenos Aires',                    code: 'IIBB' },
-  // Tucumán
-  { jurisdiccion: 'Tucumán',      subtipo: 'venta',  code: 'CIBT' },
-  { jurisdiccion: 'Tucumán',      subtipo: 'envío',  code: 'CBTUPP' },
-  { jurisdiccion: 'Tucumán',                         code: 'IBTU' },
-  // Otras (una sola variante)
-  { jurisdiccion: 'Corrientes',                      code: 'IBCO' },
-  { jurisdiccion: 'La Pampa',                        code: 'IBLP' },
-]
-
-function classifyLabel(label: string): string | null {
-  if (!label) return null
-  const text = label.toLowerCase()
-  for (const rule of LABEL_RULES) {
-    if (!text.includes(rule.jurisdiccion.toLowerCase())) continue
-    if (rule.subtipo && !text.includes(rule.subtipo.toLowerCase())) continue
-    return rule.code
-  }
-  return null
-}
-
-// =============================================================================
-// Tipos del breakdown que vamos a consumir desde rentabilidad
-// =============================================================================
+// ════════════════════════════════════════════════════════════════════
+// TIPOS
+// ════════════════════════════════════════════════════════════════════
 
 export type PerceptionBreakdown = {
-  period_key: string                              // 'YYYY-MM-01'
-  iva_credito_fiscal: number                      // recuperable en DDJJ IVA
-  ganancias_pago_a_cuenta: number                 // recuperable en DDJJ Ganancias anual
-  iibb_pago_a_cuenta_total: number                // suma de todas las jurisdicciones
-  iibb_por_jurisdiccion: Record<string, number>   // detalle
-  por_concepto: Record<string, number>            // breakdown por código
-  sin_clasificar: Array<{ label: string; amount: number }>
-  total_general: number                           // suma de todo lo fiscal
+  period_key: string
+  iva_credito_fiscal: number
+  ganancias_pago_a_cuenta: number
+  iibb_pago_a_cuenta_total: number
+  iibb_por_jurisdiccion: Record<string, number>
+  por_concepto: Record<string, number>
+  sin_clasificar: Array<{ label: string; amount: number; type: string }>
+  total_general: number
 }
 
-// =============================================================================
-// Llamadas a la API de ML
-// =============================================================================
+// ════════════════════════════════════════════════════════════════════
+// MAPEO DE CÓDIGOS ML → CLASIFICACIÓN FISCAL
+// ════════════════════════════════════════════════════════════════════
+//
+// CIVA = Percepción General IVA (3% sobre comisiones ML) → crédito fiscal IVA
+// CIRE = Percepción Especial IVA RG 5319/2023 (1-8% sobre ventas) → crédito fiscal IVA
+//        NOTA: a pesar del label "RG5319/2023" que suena a Ganancias,
+//        la RG 5319 es de IVA. El monto recuperable es contra IVA débito.
+//
+// IBCF, IBCFME, CGMV   = IIBB CABA (3 alícuotas)
+// IIBB, IIBBME         = IIBB Buenos Aires
+// IBCO                 = IIBB Corrientes
+// IBLP                 = IIBB La Pampa
+// IBTU, CBTUPP, CIBT   = IIBB Tucumán
+//
+// Si en el futuro ML agrega códigos de Ganancias, agregarlos acá con
+// tipo: 'ganancias'.
 
-const ML_BASE = 'https://api.mercadolibre.com'
+type PerceptionMapping = {
+  tipo: 'iva' | 'iibb' | 'ganancias'
+  jurisdiccion?: string
+  label: string
+}
 
+export const PERCEPTION_CODES: Record<string, PerceptionMapping> = {
+  // Percepciones IVA (créditos fiscales recuperables)
+  CIVA: { tipo: 'iva', label: 'Percepción IVA Régimen General' },
+  CIRE: { tipo: 'iva', label: 'Percepción Especial IVA RG 5319/2023' },
+
+  // Percepciones IIBB por jurisdicción
+  IBCF:   { tipo: 'iibb', jurisdiccion: 'CABA',         label: 'IIBB CABA s/cargos' },
+  IBCFME: { tipo: 'iibb', jurisdiccion: 'CABA',         label: 'IIBB CABA s/envíos' },
+  CGMV:   { tipo: 'iibb', jurisdiccion: 'CABA',         label: 'IIBB CABA s/venta CABA' },
+  IIBB:   { tipo: 'iibb', jurisdiccion: 'Buenos Aires', label: 'IIBB Buenos Aires s/cargos' },
+  IIBBME: { tipo: 'iibb', jurisdiccion: 'Buenos Aires', label: 'IIBB Buenos Aires s/envíos' },
+  IBCO:   { tipo: 'iibb', jurisdiccion: 'Corrientes',   label: 'IIBB Corrientes' },
+  IBLP:   { tipo: 'iibb', jurisdiccion: 'La Pampa',     label: 'IIBB La Pampa' },
+  IBTU:   { tipo: 'iibb', jurisdiccion: 'Tucumán',      label: 'IIBB Tucumán s/cargos' },
+  CBTUPP: { tipo: 'iibb', jurisdiccion: 'Tucumán',      label: 'IIBB Tucumán s/envíos' },
+  CIBT:   { tipo: 'iibb', jurisdiccion: 'Tucumán',      label: 'IIBB Tucumán s/venta Tuc.' },
+}
+
+// ════════════════════════════════════════════════════════════════════
+// HELPERS DE FECHAS
+// ════════════════════════════════════════════════════════════════════
+
+const TZ = 'America/Argentina/Buenos_Aires'
+
+/** Devuelve la period_key del mes en curso (formato YYYY-MM-01) */
+export function currentPeriodKey(): string {
+  const ahora = new Date()
+  const fechaAR = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(ahora)
+  const [yearStr, monthStr] = fechaAR.split('-')
+  return `${yearStr}-${monthStr}-01`
+}
+
+/** Convierte una fecha a su period_key correspondiente */
+export function periodKeyFromDate(date: Date): string {
+  const fechaAR = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date)
+  const [yearStr, monthStr] = fechaAR.split('-')
+  return `${yearStr}-${monthStr}-01`
+}
+
+/** Detecta si un período ya cerró (su mes siguiente ya empezó) */
+function isPeriodClosed(periodKey: string): boolean {
+  const [yearStr, monthStr] = periodKey.split('-')
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  const nextMonth = new Date(Date.UTC(year, month, 1))  // mes + 1 (month es 1-indexed pero new Date espera 0-indexed, así que es exacto)
+  return Date.now() >= nextMonth.getTime()
+}
+
+// ════════════════════════════════════════════════════════════════════
+// OAUTH: refresh token
+// ════════════════════════════════════════════════════════════════════
+
+async function refreshMLToken(refreshToken: string): Promise<{
+  access_token: string
+  refresh_token: string
+} | null> {
+  try {
+    const resp = await fetch('https://api.mercadolibre.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: process.env.ML_CLIENT_ID!,
+        client_secret: process.env.ML_CLIENT_SECRET!,
+        refresh_token: refreshToken,
+      }),
+    })
+    if (!resp.ok) return null
+    return await resp.json()
+  } catch {
+    return null
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// FETCH AL BILLING API
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Llama al endpoint summary/details del billing API.
+ * Requiere document_type=BILL (otros valores: CREDIT_NOTE).
+ */
 export async function fetchBillingSummary(
   token: string,
   periodKey: string,
   group: 'ML' | 'MP' = 'ML'
 ): Promise<any> {
-  const url = `${ML_BASE}/billing/integration/periods/key/${periodKey}/summary/details?group=${group}&document_type=BILL`
-  const res = await fetch(url, {
+  const url = `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary/details?group=${group}&document_type=BILL`
+
+  const resp = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   })
-  if (!res.ok) {
-    throw new Error(`ML billing summary ${res.status}: ${await res.text()}`)
+
+  if (!resp.ok) {
+    const errText = await resp.text()
+    throw new Error(`ML billing API error ${resp.status}: ${errText}`)
   }
-  return await res.json()
+  return await resp.json()
 }
 
-// =============================================================================
-// Agregador: procesa la respuesta y devuelve el breakdown estructurado
-// =============================================================================
+// ════════════════════════════════════════════════════════════════════
+// AGGREGATOR: convierte el response de ML en un PerceptionBreakdown
+// ════════════════════════════════════════════════════════════════════
 
-export function aggregatePerceptions(summaryResponse: any, periodKey: string): PerceptionBreakdown {
-  const bd: PerceptionBreakdown = {
+/**
+ * Itera sobre bill_includes.charges[] y clasifica cada percepción.
+ * Solo procesa charges con group_id = 19 (Impuestos) o 31 (Perc. Imp. MP).
+ */
+export function aggregatePerceptions(
+  summaryResponse: any,
+  periodKey: string
+): PerceptionBreakdown {
+  const breakdown: PerceptionBreakdown = {
     period_key: periodKey,
     iva_credito_fiscal: 0,
     ganancias_pago_a_cuenta: 0,
@@ -127,135 +183,167 @@ export function aggregatePerceptions(summaryResponse: any, periodKey: string): P
     total_general: 0,
   }
 
-  // La respuesta puede venir envuelta en 'summary' o no
-  const root = summaryResponse?.summary ?? summaryResponse
+  const charges = summaryResponse?.bill_includes?.charges ?? []
 
-  // charges incluye percepciones (y otros cargos que ignoramos)
-  const charges = Array.isArray(root?.charges) ? root.charges : []
-  // tax es donde algunas variantes ponen las percepciones discriminadas
-  const taxes = Array.isArray(root?.tax) ? root.tax : []
+  for (const charge of charges) {
+    const type = String(charge.type ?? '').toUpperCase()
+    const amount = Number(charge.amount ?? 0)
+    const groupId = Number(charge.group_id ?? 0)
 
-  const candidates = [...charges, ...taxes]
+    // Solo procesar percepciones (group_id 19 = Impuestos, 31 = Perc. Imp. MP)
+    if (groupId !== 19 && groupId !== 31) continue
+    if (amount === 0) continue
 
-  for (const item of candidates) {
-    if (!item || typeof item !== 'object') continue
-    const label: string = item.label ?? item.description ?? item.transaction_detail ?? ''
-    const amount = Number(item.amount ?? item.detail_amount ?? 0) || 0
+    const mapping = PERCEPTION_CODES[type]
 
-    // Solo conceptos que sean percepciones
-    if (!/perce?p/i.test(label) && !/retenc/i.test(label)) continue
-
-    const code = classifyLabel(label)
-    if (!code || !PERCEPTION_CODES[code]) {
-      bd.sin_clasificar.push({ label, amount })
+    if (!mapping) {
+      // Código de percepción desconocido — guardar para revisión
+      breakdown.sin_clasificar.push({
+        label: String(charge.label ?? ''),
+        amount,
+        type,
+      })
       continue
     }
 
-    const meta = PERCEPTION_CODES[code]
-    bd.por_concepto[meta.label] = (bd.por_concepto[meta.label] ?? 0) + amount
-    bd.total_general += amount
+    // Sumar a por_concepto
+    breakdown.por_concepto[type] = (breakdown.por_concepto[type] ?? 0) + amount
 
-    switch (meta.naturaleza) {
-      case 'credito_fiscal_iva':
-        bd.iva_credito_fiscal += amount
-        break
-      case 'pago_a_cuenta_ganancias':
-        bd.ganancias_pago_a_cuenta += amount
-        break
-      case 'pago_a_cuenta_iibb':
-        bd.iibb_pago_a_cuenta_total += amount
-        bd.iibb_por_jurisdiccion[meta.jurisdiccion] =
-          (bd.iibb_por_jurisdiccion[meta.jurisdiccion] ?? 0) + amount
-        break
+    // Clasificar por tipo fiscal
+    if (mapping.tipo === 'iva') {
+      breakdown.iva_credito_fiscal += amount
+    } else if (mapping.tipo === 'iibb') {
+      breakdown.iibb_pago_a_cuenta_total += amount
+      const jurisdiccion = mapping.jurisdiccion ?? 'Sin jurisdicción'
+      breakdown.iibb_por_jurisdiccion[jurisdiccion] =
+        (breakdown.iibb_por_jurisdiccion[jurisdiccion] ?? 0) + amount
+    } else if (mapping.tipo === 'ganancias') {
+      breakdown.ganancias_pago_a_cuenta += amount
     }
   }
 
-  // Redondear a 2 decimales
-  const round2 = (n: number) => Math.round(n * 100) / 100
-  bd.iva_credito_fiscal = round2(bd.iva_credito_fiscal)
-  bd.ganancias_pago_a_cuenta = round2(bd.ganancias_pago_a_cuenta)
-  bd.iibb_pago_a_cuenta_total = round2(bd.iibb_pago_a_cuenta_total)
-  bd.total_general = round2(bd.total_general)
-  for (const j of Object.keys(bd.iibb_por_jurisdiccion)) {
-    bd.iibb_por_jurisdiccion[j] = round2(bd.iibb_por_jurisdiccion[j])
+  // Total general (suma de los 3 grupos clasificados)
+  breakdown.total_general =
+    breakdown.iva_credito_fiscal +
+    breakdown.iibb_pago_a_cuenta_total +
+    breakdown.ganancias_pago_a_cuenta
+
+  return breakdown
+}
+
+/** Stub para compatibilidad: agrega items de MP (igual lógica) */
+export function aggregateMpItems(summaryResponse: any, periodKey: string): PerceptionBreakdown {
+  return aggregatePerceptions(summaryResponse, periodKey)
+}
+
+/** Mergea dos breakdowns (útil si se traen ML y MP por separado) */
+export function merge_breakdowns(a: PerceptionBreakdown, b: PerceptionBreakdown): PerceptionBreakdown {
+  const merged: PerceptionBreakdown = {
+    period_key: a.period_key,
+    iva_credito_fiscal: a.iva_credito_fiscal + b.iva_credito_fiscal,
+    ganancias_pago_a_cuenta: a.ganancias_pago_a_cuenta + b.ganancias_pago_a_cuenta,
+    iibb_pago_a_cuenta_total: a.iibb_pago_a_cuenta_total + b.iibb_pago_a_cuenta_total,
+    iibb_por_jurisdiccion: { ...a.iibb_por_jurisdiccion },
+    por_concepto: { ...a.por_concepto },
+    sin_clasificar: [...a.sin_clasificar, ...b.sin_clasificar],
+    total_general: a.total_general + b.total_general,
   }
-  for (const k of Object.keys(bd.por_concepto)) {
-    bd.por_concepto[k] = round2(bd.por_concepto[k])
+  for (const [j, v] of Object.entries(b.iibb_por_jurisdiccion)) {
+    merged.iibb_por_jurisdiccion[j] = (merged.iibb_por_jurisdiccion[j] ?? 0) + v
   }
-
-  return bd
+  for (const [c, v] of Object.entries(b.por_concepto)) {
+    merged.por_concepto[c] = (merged.por_concepto[c] ?? 0) + v
+  }
+  return merged
 }
 
-// =============================================================================
-// Helpers de período
-// =============================================================================
+// ════════════════════════════════════════════════════════════════════
+// CACHE CON SUPABASE
+// ════════════════════════════════════════════════════════════════════
 
-const TZ = 'America/Argentina/Buenos_Aires'
+const TTL_HOURS_PERIOD_OPEN = 24
 
-export function periodKeyFromDate(date: Date): string {
-  const fechaAR = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(date)
-  const [y, m] = fechaAR.split('-')
-  return `${y}-${m}-01`
-}
-
-export function currentPeriodKey(): string {
-  return periodKeyFromDate(new Date())
-}
-
-// =============================================================================
-// Cache en Supabase
-// =============================================================================
-// Política: los períodos EN CURSO se actualizan cada 24hs.
-// Los períodos CERRADOS son inmutables, se cachean para siempre.
-
-const TTL_MS_PERIODO_ACTUAL = 24 * 60 * 60 * 1000
-
+/**
+ * Obtiene el breakdown del período, usando cache si está fresco.
+ * - Si el período está cerrado, cache eterno.
+ * - Si está en curso, cache de 24 hs.
+ * - forceRefresh = true ignora cache y hace fetch siempre.
+ *
+ * Refresca el access_token de ML proactivamente antes del fetch.
+ */
 export async function getCachedOrFetch(
   supabase: SupabaseClient,
   token: string,
   periodKey: string,
-  forceRefresh = false
+  forceRefresh: boolean = false
 ): Promise<PerceptionBreakdown> {
-  const today = currentPeriodKey()
-  const esActual = periodKey === today
-
+  // 1. Check cache
   if (!forceRefresh) {
     const { data: cached } = await supabase
       .from('ml_billing_periods')
-      .select('breakdown, updated_at, status')
+      .select('*')
       .eq('period_key', periodKey)
       .maybeSingle()
 
-    if (cached?.breakdown) {
-      const age = Date.now() - new Date(cached.updated_at).getTime()
-      // Período cerrado: cache eterno
-      if (cached.status === 'CERRADO') {
+    if (cached) {
+      const status = cached.status
+      const updatedAt = new Date(cached.updated_at).getTime()
+      const ageHours = (Date.now() - updatedAt) / (1000 * 60 * 60)
+
+      if (status === 'CLOSED') {
         return cached.breakdown as PerceptionBreakdown
       }
-      // Período en curso: 24hs de TTL
-      if (esActual && age < TTL_MS_PERIODO_ACTUAL) {
+      if (status === 'OPEN' && ageHours < TTL_HOURS_PERIOD_OPEN) {
         return cached.breakdown as PerceptionBreakdown
+      }
+      // Si está expirado, sigue con el fetch
+    }
+  }
+
+  // 2. Refresh proactivo del token desde la DB
+  const { data: tokenRow } = await supabase
+    .from('ml_tokens')
+    .select('*')
+    .neq('access_token', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  let activeToken = token
+  if (tokenRow?.refresh_token) {
+    const refreshed = await refreshMLToken(tokenRow.refresh_token)
+    if (refreshed?.access_token) {
+      activeToken = refreshed.access_token
+      // refresh_token rota en cada uso, hay que guardarlo
+      if (refreshed.refresh_token) {
+        try {
+          await supabase.from('ml_tokens').update({
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token,
+          }).eq('id', tokenRow.id)
+        } catch (e) {
+          console.error('Error actualizando token:', e)
+        }
       }
     }
   }
 
-  // Cache miss o forceRefresh: pegar a ML
-  const summary = await fetchBillingSummary(token, periodKey, 'ML')
+  // 3. Fetch al billing API
+  const summary = await fetchBillingSummary(activeToken, periodKey, 'ML')
   const breakdown = aggregatePerceptions(summary, periodKey)
 
-  await supabase
-    .from('ml_billing_periods')
-    .upsert(
-      {
-        period_key: periodKey,
-        breakdown,
-        status: esActual ? 'EN CURSO' : 'CERRADO',
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'period_key' }
-    )
+  // 4. Guardar en cache
+  const status = isPeriodClosed(periodKey) ? 'CLOSED' : 'OPEN'
+  try {
+    await supabase.from('ml_billing_periods').upsert({
+      period_key: periodKey,
+      breakdown: breakdown as any,
+      status,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'period_key' })
+  } catch (e) {
+    console.error('Error guardando cache de billing:', e)
+  }
 
   return breakdown
 }
