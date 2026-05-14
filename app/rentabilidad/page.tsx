@@ -7,7 +7,8 @@ import {
   type ManualComponent,
 } from '../lib/combos'
 import {
-  getCachedOrFetch,
+  fetchBillingWithFallback,
+  fetchCargosPendientesManual,
   currentPeriodKey,
   type PerceptionBreakdown,
 } from '../lib/ml-billing'
@@ -87,7 +88,7 @@ export type Calculo = {
   bonificacionEnvio: number
   envioCobradoTotal: number
   costoFlexTotal: number
-  publicidad: number
+  cargosPendientesML: number  // antes 'publicidad'
   gastosVarios: number
   ivaDebito: number
   ivaCredito: number
@@ -116,16 +117,18 @@ export type Calculo = {
   mejorDiaFecha: string | null
   coberturaCosto: number
   comisionPct: number
-  roas: number
+  // Campos legacy mantenidos por compatibilidad
+  publicidad: number  // siempre 0 ahora
+  roas: number  // siempre 0 ahora
   comision: number
   envios: number
   flexBonif: number
   iibb: number
-  // === Percepciones mensuales de ML (Billing API) ===
-  ivaCreditoPercepcionML: number              // Percepción IVA Régimen General (recuperable)
-  iibbRetenidoBilling: number                  // Retenciones IIBB ML mensuales (pago a cuenta)
-  iibbBreakdownBilling: Record<string, number> // IIBB por jurisdicción del billing
-  gananciasRetenido: number                    // INFORMATIVO: pago a cta Ganancias anual
+  // Percepciones mensuales de ML (Billing API)
+  ivaCreditoPercepcionML: number
+  iibbRetenidoBilling: number
+  iibbBreakdownBilling: Record<string, number>
+  gananciasRetenido: number
 }
 
 function diaArgentinaFromISO(iso: string): string {
@@ -135,15 +138,6 @@ function diaArgentinaFromISO(iso: string): string {
   }).format(d)
 }
 
-/**
- * Prorratea un monto mensual al subperíodo solicitado.
- * Si el período cubre TODO el mes, devuelve el monto completo.
- * Si cubre solo X días del mes, devuelve la fracción correspondiente.
- *
- * Ejemplo: si el mes tiene $30 de percepción y el período es "hoy" (1 día),
- * devuelve $1. Aproximación pragmática: las percepciones mensuales se
- * distribuyen uniformemente entre los días del mes.
- */
 function prorratearPorPeriodo(montoMensual: number, desde: Date, hasta: Date): number {
   if (montoMensual === 0) return 0
 
@@ -178,7 +172,7 @@ function calcularRentabilidad(
   individualesByLast: Map<string, ItemCostInfo[]>,
   manualComps: Map<string, ManualComponent[]>,
   itemIdToSeller: Map<string, string | null>,
-  publicidadAmount: number,
+  cargosPendientesMLMensual: number,
   gastosVariosAmount: number,
   desde: Date,
   hasta: Date,
@@ -197,7 +191,6 @@ function calcularRentabilidad(
 
   const iibbRetenidoMP = paid.reduce((s, o) => s + Number(o.imp_iibb_total ?? 0), 0)
 
-  // 🆕 IIBB retenido por ML del Billing API (mensual, prorrateado al subperíodo)
   const iibbRetenidoBilling = prorratearPorPeriodo(
     billingBreakdown?.iibb_pago_a_cuenta_total ?? 0,
     desde,
@@ -207,6 +200,9 @@ function calcularRentabilidad(
   const iibbRetenido = iibbRetenidoMP + iibbRetenidoBilling
   const iibbObligacion = facturacion * (iibbTasa / 100)
   const iibbPendiente = Math.max(0, iibbObligacion - iibbRetenido)
+
+  // Cargos pendientes ML prorrateados al subperíodo
+  const cargosPendientesML = prorratearPorPeriodo(cargosPendientesMLMensual, desde, hasta)
 
   let ingresosNetos = 0
   let ivaDebito = 0
@@ -255,10 +251,8 @@ function calcularRentabilidad(
     }
   }
 
-  // 🔥 IVA crédito sobre comisiones ML (Factura A)
   const ivaCreditoML = (cargosML / 1.21) * 0.21
 
-  // 🆕 IVA crédito por percepción ML del Billing API (mensual, prorrateado)
   const ivaCreditoPercepcionML = prorratearPorPeriodo(
     billingBreakdown?.iva_credito_fiscal ?? 0,
     desde,
@@ -271,7 +265,7 @@ function calcularRentabilidad(
   const gananciaOperativa =
     ingresosNetos - costoMerca - cargosML - retenciones +
     bonificacionEnvio + envioCobradoTotal - costoFlexTotal -
-    publicidadAmount - gastosVariosAmount
+    cargosPendientesML - gastosVariosAmount
 
   const ganancia = gananciaOperativa - ivaAPagar - iibbPendiente
   const margenOperativo = ingresosNetos > 0 ? (gananciaOperativa / ingresosNetos) * 100 : 0
@@ -302,15 +296,12 @@ function calcularRentabilidad(
 
   const coberturaCosto = unidades > 0 ? (unidadesConCosto / unidades) * 100 : 0
   const comisionPct = facturacion > 0 ? (cargosML / facturacion) * 100 : 0
-  const roas = publicidadAmount > 0 ? facturacion / publicidadAmount : 0
 
-  // 🆕 Jurisdicciones de IIBB del billing, prorrateadas
   const iibbBreakdownBilling = prorratearJurisdicciones(
     billingBreakdown?.iibb_por_jurisdiccion ?? {},
     desde, hasta
   )
 
-  // 🆕 Ganancias retenido (informativo, no afecta cash neto)
   const gananciasRetenido = prorratearPorPeriodo(
     billingBreakdown?.ganancias_pago_a_cuenta ?? 0,
     desde, hasta
@@ -320,7 +311,8 @@ function calcularRentabilidad(
     facturacion, ingresosNetos,
     costoMerca, cargosML, retenciones, bonificacionEnvio,
     envioCobradoTotal, costoFlexTotal,
-    publicidad: publicidadAmount, gastosVarios: gastosVariosAmount,
+    cargosPendientesML,
+    gastosVarios: gastosVariosAmount,
     ivaDebito, ivaCredito, ivaCreditoMerca, ivaCreditoML,
     ivaAPagar,
     iibbTasa, iibbObligacion, iibbRetenido, iibbPendiente,
@@ -329,9 +321,9 @@ function calcularRentabilidad(
     itemsSinCosto: Array.from(itemsSinCostoSet),
     ticketPromedio, envioCount, flexCount,
     diasActivos, diasTotales, mejorDiaMonto, mejorDiaFecha,
-    coberturaCosto, comisionPct, roas,
+    coberturaCosto, comisionPct,
+    publicidad: 0, roas: 0,  // legacy
     comision: cargosML, envios: 0, flexBonif: bonificacionEnvio, iibb: retenciones,
-    // 🆕 Campos nuevos del billing mensual
     ivaCreditoPercepcionML,
     iibbRetenidoBilling,
     iibbBreakdownBilling,
@@ -428,14 +420,6 @@ async function fetchAllManualComponents(supabase: any): Promise<Map<string, Manu
   return map
 }
 
-async function fetchAdsTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
-  const desdeStr = diaArgentinaFromISO(desde.toISOString())
-  const hastaStr = diaArgentinaFromISO(hasta.toISOString())
-  const { data } = await supabase.from('ad_expenses').select('amount').gte('date', desdeStr).lte('date', hastaStr)
-  if (!data) return 0
-  return (data as any[]).reduce((s, r) => s + Number(r.amount ?? 0), 0)
-}
-
 async function fetchQuickExpensesTotal(supabase: any, desde: Date, hasta: Date): Promise<number> {
   const desdeStr = diaArgentinaFromISO(desde.toISOString())
   const hastaStr = diaArgentinaFromISO(hasta.toISOString())
@@ -449,39 +433,11 @@ async function fetchIIBBTasa(supabase: any): Promise<number> {
   return data ? Number(data.percentage) : 5
 }
 
-/**
- * Trae el breakdown de percepciones mensuales del mes en curso.
- * Si falla por cualquier razón (sin token, ML no responde, etc), devuelve null
- * y el dashboard sigue funcionando como antes (graceful fallback).
- */
 async function fetchBillingBreakdown(supabase: any, hastaActual: Date): Promise<PerceptionBreakdown | null> {
-  try {
-    const periodKeyActual = currentPeriodKey()
-    const desdeMesActual = new Date(periodKeyActual + 'T00:00:00-03:00')
-
-    // Solo traer billing si el período toca días del mes en curso
-    if (hastaActual < desdeMesActual) return null
-
-    const { data: tokenData } = await supabase
-      .from('ml_tokens')
-      .select('*')
-      .neq('access_token', 'pending')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (!tokenData) return null
-
-    return await getCachedOrFetch(
-      supabase,
-      tokenData.access_token,
-      periodKeyActual,
-      false  // sin force refresh, usar cache si está fresco
-    )
-  } catch (e) {
-    console.error('Error trayendo billing breakdown:', e)
-    return null
-  }
+  const periodKeyActual = currentPeriodKey()
+  const desdeMesActual = new Date(periodKeyActual + 'T00:00:00-03:00')
+  if (hastaActual < desdeMesActual) return null
+  return await fetchBillingWithFallback(supabase)
 }
 
 export default async function RentabilidadPage({ searchParams }: Props) {
@@ -527,7 +483,6 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     labelPeriodo = 'últimos 90 días'
     labelComparacion = 'vs 90 días anteriores'
   } else {
-    // hoy (default)
     desdeActual = inicioDiaArgentina(0)
     hastaActual = ahora
     const lapsoMs = hastaActual.getTime() - desdeActual.getTime()
@@ -539,16 +494,14 @@ export default async function RentabilidadPage({ searchParams }: Props) {
 
   const [
     actual, previo,
-    publicidadActual, publicidadPrev,
     gastosActual, gastosPrev,
     itemsML, itemsManuales, manualComps,
     iibbTasa,
     billingBreakdown,
+    cargosPendientesMLMensual,
   ] = await Promise.all([
     fetchPeriodData(supabase, desdeActual.toISOString(), hastaActual.toISOString()),
     fetchPeriodData(supabase, desdePrev.toISOString(), hastaPrev.toISOString()),
-    fetchAdsTotal(supabase, desdeActual, hastaActual),
-    fetchAdsTotal(supabase, desdePrev, hastaPrev),
     fetchQuickExpensesTotal(supabase, desdeActual, hastaActual),
     fetchQuickExpensesTotal(supabase, desdePrev, hastaPrev),
     fetchAllItems(supabase),
@@ -556,6 +509,7 @@ export default async function RentabilidadPage({ searchParams }: Props) {
     fetchAllManualComponents(supabase),
     fetchIIBBTasa(supabase),
     fetchBillingBreakdown(supabase, hastaActual),
+    fetchCargosPendientesManual(supabase),
   ])
 
   const allItems = [...itemsML, ...itemsManuales]
@@ -589,14 +543,14 @@ export default async function RentabilidadPage({ searchParams }: Props) {
   const calcActual = calcularRentabilidad(
     actual.orders, actual.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadActual, gastosActual, desdeActual, hastaActual, iibbTasa,
+    cargosPendientesMLMensual, gastosActual, desdeActual, hastaActual, iibbTasa,
     billingBreakdown
   )
   const calcPrev = calcularRentabilidad(
     previo.orders, previo.orderItems,
     itemsBySku, costsBySku, individualesByLast, manualComps, itemIdToSeller,
-    publicidadPrev, gastosPrev, desdePrev, hastaPrev, iibbTasa,
-    null  // el período previo no necesita billing (es mes anterior)
+    0, gastosPrev, desdePrev, hastaPrev, iibbTasa,
+    null
   )
 
   return (

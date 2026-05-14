@@ -1,18 +1,17 @@
 /**
  * Cliente del Billing API de Mercado Libre.
  *
- * Endpoint: GET /billing/integration/periods/key/{key}/summary/details
- *           ?group=ML&document_type=BILL
+ * Prioridad de fuentes (en este orden):
+ * 1. Manual override del usuario (tabla billing_manual_override)
+ * 2. Endpoint API ML (summary/details con document_type=BILL)
+ * 3. Fallback: mes anterior escalado por relación de facturación
  *
- * Recupera percepciones impositivas (IVA, IIBB por jurisdicción, Ganancias)
- * del período mensual de facturación y las agrega en un breakdown manejable.
+ * El override manual es preciso (viene del panel de ML). El endpoint es
+ * preciso pero solo funciona para meses cerrados. El escalado es estimado.
  *
  * Caching:
  * - Período cerrado: cache eterno
  * - Período en curso: cache de 24 hs
- *
- * IMPORTANTE: El billing API tiene rate limit de 1 query/día/usuario.
- * Por eso siempre que se pueda, usar el cache.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -30,25 +29,15 @@ export type PerceptionBreakdown = {
   por_concepto: Record<string, number>
   sin_clasificar: Array<{ label: string; amount: number; type: string }>
   total_general: number
+  is_estimate?: boolean
+  source_period_key?: string
+  /** Origen del dato: 'API' (endpoint billing), 'MANUAL' (override usuario), 'ESCALADO' (fallback) */
+  source?: 'API' | 'MANUAL' | 'ESCALADO'
 }
 
 // ════════════════════════════════════════════════════════════════════
-// MAPEO DE CÓDIGOS ML → CLASIFICACIÓN FISCAL
+// MAPEO DE CÓDIGOS
 // ════════════════════════════════════════════════════════════════════
-//
-// CIVA = Percepción General IVA (3% sobre comisiones ML) → crédito fiscal IVA
-// CIRE = Percepción Especial IVA RG 5319/2023 (1-8% sobre ventas) → crédito fiscal IVA
-//        NOTA: a pesar del label "RG5319/2023" que suena a Ganancias,
-//        la RG 5319 es de IVA. El monto recuperable es contra IVA débito.
-//
-// IBCF, IBCFME, CGMV   = IIBB CABA (3 alícuotas)
-// IIBB, IIBBME         = IIBB Buenos Aires
-// IBCO                 = IIBB Corrientes
-// IBLP                 = IIBB La Pampa
-// IBTU, CBTUPP, CIBT   = IIBB Tucumán
-//
-// Si en el futuro ML agrega códigos de Ganancias, agregarlos acá con
-// tipo: 'ganancias'.
 
 type PerceptionMapping = {
   tipo: 'iva' | 'iibb' | 'ganancias'
@@ -57,11 +46,8 @@ type PerceptionMapping = {
 }
 
 export const PERCEPTION_CODES: Record<string, PerceptionMapping> = {
-  // Percepciones IVA (créditos fiscales recuperables)
   CIVA: { tipo: 'iva', label: 'Percepción IVA Régimen General' },
   CIRE: { tipo: 'iva', label: 'Percepción Especial IVA RG 5319/2023' },
-
-  // Percepciones IIBB por jurisdicción
   IBCF:   { tipo: 'iibb', jurisdiccion: 'CABA',         label: 'IIBB CABA s/cargos' },
   IBCFME: { tipo: 'iibb', jurisdiccion: 'CABA',         label: 'IIBB CABA s/envíos' },
   CGMV:   { tipo: 'iibb', jurisdiccion: 'CABA',         label: 'IIBB CABA s/venta CABA' },
@@ -80,7 +66,6 @@ export const PERCEPTION_CODES: Record<string, PerceptionMapping> = {
 
 const TZ = 'America/Argentina/Buenos_Aires'
 
-/** Devuelve la period_key del mes en curso (formato YYYY-MM-01) */
 export function currentPeriodKey(): string {
   const ahora = new Date()
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
@@ -90,7 +75,6 @@ export function currentPeriodKey(): string {
   return `${yearStr}-${monthStr}-01`
 }
 
-/** Convierte una fecha a su period_key correspondiente */
 export function periodKeyFromDate(date: Date): string {
   const fechaAR = new Intl.DateTimeFormat('en-CA', {
     timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -99,17 +83,35 @@ export function periodKeyFromDate(date: Date): string {
   return `${yearStr}-${monthStr}-01`
 }
 
-/** Detecta si un período ya cerró (su mes siguiente ya empezó) */
+export function previousPeriodKey(periodKey: string): string {
+  const [yearStr, monthStr] = periodKey.split('-')
+  let year = Number(yearStr)
+  let month = Number(monthStr) - 1
+  if (month <= 0) { month = 12; year -= 1 }
+  return `${year}-${String(month).padStart(2, '0')}-01`
+}
+
 function isPeriodClosed(periodKey: string): boolean {
   const [yearStr, monthStr] = periodKey.split('-')
   const year = Number(yearStr)
   const month = Number(monthStr)
-  const nextMonth = new Date(Date.UTC(year, month, 1))  // mes + 1 (month es 1-indexed pero new Date espera 0-indexed, así que es exacto)
+  const nextMonth = new Date(Date.UTC(year, month, 1))
   return Date.now() >= nextMonth.getTime()
 }
 
+function rangoIsoDelMes(periodKey: string): { desde: string; hasta: string } {
+  const desde = new Date(`${periodKey}T00:00:00-03:00`).toISOString()
+  const [yearStr, monthStr] = periodKey.split('-')
+  let year = Number(yearStr)
+  let month = Number(monthStr) + 1
+  if (month > 12) { month = 1; year += 1 }
+  const proximoPeriodKey = `${year}-${String(month).padStart(2, '0')}-01`
+  const hasta = new Date(`${proximoPeriodKey}T00:00:00-03:00`).toISOString()
+  return { desde, hasta }
+}
+
 // ════════════════════════════════════════════════════════════════════
-// OAUTH: refresh token
+// OAUTH
 // ════════════════════════════════════════════════════════════════════
 
 async function refreshMLToken(refreshToken: string): Promise<{
@@ -138,21 +140,13 @@ async function refreshMLToken(refreshToken: string): Promise<{
 // FETCH AL BILLING API
 // ════════════════════════════════════════════════════════════════════
 
-/**
- * Llama al endpoint summary/details del billing API.
- * Requiere document_type=BILL (otros valores: CREDIT_NOTE).
- */
 export async function fetchBillingSummary(
   token: string,
   periodKey: string,
   group: 'ML' | 'MP' = 'ML'
 ): Promise<any> {
   const url = `https://api.mercadolibre.com/billing/integration/periods/key/${periodKey}/summary/details?group=${group}&document_type=BILL`
-
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
   if (!resp.ok) {
     const errText = await resp.text()
     throw new Error(`ML billing API error ${resp.status}: ${errText}`)
@@ -161,13 +155,9 @@ export async function fetchBillingSummary(
 }
 
 // ════════════════════════════════════════════════════════════════════
-// AGGREGATOR: convierte el response de ML en un PerceptionBreakdown
+// AGGREGATOR
 // ════════════════════════════════════════════════════════════════════
 
-/**
- * Itera sobre bill_includes.charges[] y clasifica cada percepción.
- * Solo procesa charges con group_id = 19 (Impuestos) o 31 (Perc. Imp. MP).
- */
 export function aggregatePerceptions(
   summaryResponse: any,
   periodKey: string
@@ -190,26 +180,21 @@ export function aggregatePerceptions(
     const amount = Number(charge.amount ?? 0)
     const groupId = Number(charge.group_id ?? 0)
 
-    // Solo procesar percepciones (group_id 19 = Impuestos, 31 = Perc. Imp. MP)
     if (groupId !== 19 && groupId !== 31) continue
     if (amount === 0) continue
 
     const mapping = PERCEPTION_CODES[type]
 
     if (!mapping) {
-      // Código de percepción desconocido — guardar para revisión
       breakdown.sin_clasificar.push({
         label: String(charge.label ?? ''),
-        amount,
-        type,
+        amount, type,
       })
       continue
     }
 
-    // Sumar a por_concepto
     breakdown.por_concepto[type] = (breakdown.por_concepto[type] ?? 0) + amount
 
-    // Clasificar por tipo fiscal
     if (mapping.tipo === 'iva') {
       breakdown.iva_credito_fiscal += amount
     } else if (mapping.tipo === 'iibb') {
@@ -222,7 +207,6 @@ export function aggregatePerceptions(
     }
   }
 
-  // Total general (suma de los 3 grupos clasificados)
   breakdown.total_general =
     breakdown.iva_credito_fiscal +
     breakdown.iibb_pago_a_cuenta_total +
@@ -231,12 +215,10 @@ export function aggregatePerceptions(
   return breakdown
 }
 
-/** Stub para compatibilidad: agrega items de MP (igual lógica) */
 export function aggregateMpItems(summaryResponse: any, periodKey: string): PerceptionBreakdown {
   return aggregatePerceptions(summaryResponse, periodKey)
 }
 
-/** Mergea dos breakdowns (útil si se traen ML y MP por separado) */
 export function merge_breakdowns(a: PerceptionBreakdown, b: PerceptionBreakdown): PerceptionBreakdown {
   const merged: PerceptionBreakdown = {
     period_key: a.period_key,
@@ -258,26 +240,17 @@ export function merge_breakdowns(a: PerceptionBreakdown, b: PerceptionBreakdown)
 }
 
 // ════════════════════════════════════════════════════════════════════
-// CACHE CON SUPABASE
+// CACHE
 // ════════════════════════════════════════════════════════════════════
 
 const TTL_HOURS_PERIOD_OPEN = 24
 
-/**
- * Obtiene el breakdown del período, usando cache si está fresco.
- * - Si el período está cerrado, cache eterno.
- * - Si está en curso, cache de 24 hs.
- * - forceRefresh = true ignora cache y hace fetch siempre.
- *
- * Refresca el access_token de ML proactivamente antes del fetch.
- */
 export async function getCachedOrFetch(
   supabase: SupabaseClient,
   token: string,
   periodKey: string,
   forceRefresh: boolean = false
 ): Promise<PerceptionBreakdown> {
-  // 1. Check cache
   if (!forceRefresh) {
     const { data: cached } = await supabase
       .from('ml_billing_periods')
@@ -296,11 +269,9 @@ export async function getCachedOrFetch(
       if (status === 'OPEN' && ageHours < TTL_HOURS_PERIOD_OPEN) {
         return cached.breakdown as PerceptionBreakdown
       }
-      // Si está expirado, sigue con el fetch
     }
   }
 
-  // 2. Refresh proactivo del token desde la DB
   const { data: tokenRow } = await supabase
     .from('ml_tokens')
     .select('*')
@@ -314,7 +285,6 @@ export async function getCachedOrFetch(
     const refreshed = await refreshMLToken(tokenRow.refresh_token)
     if (refreshed?.access_token) {
       activeToken = refreshed.access_token
-      // refresh_token rota en cada uso, hay que guardarlo
       if (refreshed.refresh_token) {
         try {
           await supabase.from('ml_tokens').update({
@@ -328,11 +298,9 @@ export async function getCachedOrFetch(
     }
   }
 
-  // 3. Fetch al billing API
   const summary = await fetchBillingSummary(activeToken, periodKey, 'ML')
   const breakdown = aggregatePerceptions(summary, periodKey)
 
-  // 4. Guardar en cache
   const status = isPeriodClosed(periodKey) ? 'CLOSED' : 'OPEN'
   try {
     await supabase.from('ml_billing_periods').upsert({
@@ -346,4 +314,237 @@ export async function getCachedOrFetch(
   }
 
   return breakdown
+}
+
+// ════════════════════════════════════════════════════════════════════
+// HELPERS PARA OVERRIDE Y ESCALADO
+// ════════════════════════════════════════════════════════════════════
+
+async function fetchManualOverride(
+  supabase: any,
+  periodKey: string
+): Promise<{ percepciones_totales: number; updated_at: string } | null> {
+  try {
+    const { data } = await supabase
+      .from('billing_manual_override')
+      .select('percepciones_totales, updated_at')
+      .eq('period_key', periodKey)
+      .maybeSingle()
+    if (!data) return null
+    return {
+      percepciones_totales: Number(data.percepciones_totales),
+      updated_at: data.updated_at,
+    }
+  } catch (e) {
+    console.error('Error fetchManualOverride:', e)
+    return null
+  }
+}
+
+/**
+ * Devuelve los "Cargos pendientes de pago" cargados manualmente para el período.
+ * Es un valor opcional que el usuario carga desde el panel de ML.
+ * Se usa como gasto adicional del mes (típicamente publicidad, mantenimiento, etc.).
+ */
+export async function fetchCargosPendientesManual(
+  supabase: any,
+  periodKey?: string
+): Promise<number> {
+  try {
+    const pk = periodKey ?? currentPeriodKey()
+    const { data } = await supabase
+      .from('billing_manual_override')
+      .select('cargos_pendientes')
+      .eq('period_key', pk)
+      .maybeSingle()
+    return data?.cargos_pendientes ? Number(data.cargos_pendientes) : 0
+  } catch {
+    return 0
+  }
+}
+
+async function fetchFacturacionDePeriodo(
+  supabase: any,
+  periodKey: string
+): Promise<number> {
+  const { desde, hasta } = rangoIsoDelMes(periodKey)
+  const { data } = await supabase
+    .from('orders')
+    .select('total_amount')
+    .eq('status', 'paid')
+    .gte('date_created', desde)
+    .lt('date_created', hasta)
+  if (!data) return 0
+  return (data as any[]).reduce((s, o) => s + Number(o.total_amount ?? 0), 0)
+}
+
+/**
+ * Toma un monto total manual y lo expande a un breakdown completo usando las
+ * proporciones del mes anterior cerrado (% IVA, % IIBB por jurisdicción).
+ */
+function expandFromManualTotal(
+  montoTotal: number,
+  prevBd: PerceptionBreakdown,
+  newPeriodKey: string
+): PerceptionBreakdown {
+  if (prevBd.total_general === 0) {
+    // Sin referencia previa, todo va a IIBB (más conservador para no inflar IVA crédito)
+    return {
+      period_key: newPeriodKey,
+      iva_credito_fiscal: 0,
+      ganancias_pago_a_cuenta: 0,
+      iibb_pago_a_cuenta_total: montoTotal,
+      iibb_por_jurisdiccion: {},
+      por_concepto: {},
+      sin_clasificar: [],
+      total_general: montoTotal,
+      source: 'MANUAL',
+      source_period_key: 'MANUAL',
+    }
+  }
+
+  const propIva = prevBd.iva_credito_fiscal / prevBd.total_general
+  const propIibb = prevBd.iibb_pago_a_cuenta_total / prevBd.total_general
+  const propGan = prevBd.ganancias_pago_a_cuenta / prevBd.total_general
+
+  const ivaCred = montoTotal * propIva
+  const iibbTotal = montoTotal * propIibb
+  const gan = montoTotal * propGan
+
+  // Distribuir IIBB por jurisdicción según proporciones del mes anterior
+  const iibbPorJur: Record<string, number> = {}
+  if (prevBd.iibb_pago_a_cuenta_total > 0) {
+    for (const [j, v] of Object.entries(prevBd.iibb_por_jurisdiccion)) {
+      const propJur = v / prevBd.iibb_pago_a_cuenta_total
+      iibbPorJur[j] = iibbTotal * propJur
+    }
+  }
+
+  // Distribuir por_concepto proporcionalmente también (útil para UI)
+  const porConcepto: Record<string, number> = {}
+  if (prevBd.total_general > 0) {
+    for (const [c, v] of Object.entries(prevBd.por_concepto)) {
+      porConcepto[c] = (v / prevBd.total_general) * montoTotal
+    }
+  }
+
+  return {
+    period_key: newPeriodKey,
+    iva_credito_fiscal: ivaCred,
+    ganancias_pago_a_cuenta: gan,
+    iibb_pago_a_cuenta_total: iibbTotal,
+    iibb_por_jurisdiccion: iibbPorJur,
+    por_concepto: porConcepto,
+    sin_clasificar: [],
+    total_general: montoTotal,
+    source: 'MANUAL',
+    source_period_key: prevBd.period_key,
+  }
+}
+
+function scaleBreakdown(
+  bd: PerceptionBreakdown,
+  k: number,
+  newPeriodKey: string
+): PerceptionBreakdown {
+  return {
+    period_key: newPeriodKey,
+    source_period_key: bd.period_key,
+    iva_credito_fiscal: bd.iva_credito_fiscal * k,
+    ganancias_pago_a_cuenta: bd.ganancias_pago_a_cuenta * k,
+    iibb_pago_a_cuenta_total: bd.iibb_pago_a_cuenta_total * k,
+    iibb_por_jurisdiccion: Object.fromEntries(
+      Object.entries(bd.iibb_por_jurisdiccion).map(([j, v]) => [j, (v as number) * k])
+    ),
+    por_concepto: Object.fromEntries(
+      Object.entries(bd.por_concepto).map(([c, v]) => [c, (v as number) * k])
+    ),
+    sin_clasificar: bd.sin_clasificar,
+    total_general: bd.total_general * k,
+    is_estimate: true,
+    source: 'ESCALADO',
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// FETCH PRINCIPAL: con override manual + fallback escalado
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Devuelve el breakdown de percepciones del mes en curso, en este orden:
+ *
+ * 1. Si hay un override manual cargado → usar ese (expandido por proporciones del mes anterior).
+ * 2. Si el endpoint API devuelve datos reales → usar esos.
+ * 3. Si todo falla, escalar el mes anterior por relación de facturación.
+ *
+ * El campo `source` del breakdown indica de dónde vino el dato.
+ */
+export async function fetchBillingWithFallback(
+  supabase: any
+): Promise<PerceptionBreakdown | null> {
+  try {
+    const currentPK = currentPeriodKey()
+    const prevPK = previousPeriodKey(currentPK)
+
+    const { data: tokenData } = await supabase
+      .from('ml_tokens')
+      .select('*')
+      .neq('access_token', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!tokenData) return null
+
+    // Traer el breakdown del mes anterior (necesario para proporciones y escalado)
+    let prevBd: PerceptionBreakdown | null = null
+    try {
+      prevBd = await getCachedOrFetch(supabase, tokenData.access_token, prevPK, false)
+    } catch (e) {
+      console.error('Error trayendo mes anterior:', e)
+    }
+
+    // 1. Manual override
+    const override = await fetchManualOverride(supabase, currentPK)
+    if (override && override.percepciones_totales > 0) {
+      if (prevBd && prevBd.total_general > 0) {
+        return expandFromManualTotal(override.percepciones_totales, prevBd, currentPK)
+      }
+      // Sin referencia previa, todo a IIBB como heurística conservadora
+      return expandFromManualTotal(override.percepciones_totales, {
+        period_key: prevPK,
+        iva_credito_fiscal: 0,
+        ganancias_pago_a_cuenta: 0,
+        iibb_pago_a_cuenta_total: 0,
+        iibb_por_jurisdiccion: {},
+        por_concepto: {},
+        sin_clasificar: [],
+        total_general: 0,
+      }, currentPK)
+    }
+
+    // 2. Endpoint API ML para mes en curso (puede venir vacío si aún no se cerró)
+    try {
+      const currentBd = await getCachedOrFetch(supabase, tokenData.access_token, currentPK, false)
+      if (currentBd && currentBd.total_general > 0) {
+        return { ...currentBd, source: 'API' }
+      }
+    } catch (e) {
+      console.error('Error API mes en curso:', e)
+    }
+
+    // 3. Escalado heurístico desde el mes anterior
+    if (!prevBd || prevBd.total_general === 0) return null
+
+    const [factCurrent, factPrev] = await Promise.all([
+      fetchFacturacionDePeriodo(supabase, currentPK),
+      fetchFacturacionDePeriodo(supabase, prevPK),
+    ])
+    if (factPrev === 0) return null
+
+    const k = factCurrent / factPrev
+    return scaleBreakdown(prevBd, k, currentPK)
+  } catch (e) {
+    console.error('Error en fetchBillingWithFallback:', e)
+    return null
+  }
 }

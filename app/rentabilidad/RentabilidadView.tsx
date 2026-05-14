@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import CargarAdsModal from '../components/CargarAdsModal'
+import BillingOverrideModal from '../components/BillingOverrideModal'
 import GastoRapidoModal from '../components/GastoRapidoModal'
 import ConfigModal from '../components/ConfigModal'
 import QuickCalc from '../components/QuickCalc'
@@ -39,7 +39,7 @@ export default function RentabilidadView({
   period, labelPeriodo, labelComparacion, calcActual, calcPrev,
 }: Props) {
   const router = useRouter()
-  const [adsModalOpen, setAdsModalOpen] = useState(false)
+  const [overrideModalOpen, setOverrideModalOpen] = useState(false)
   const [gastoModalOpen, setGastoModalOpen] = useState(false)
   const [configModalOpen, setConfigModalOpen] = useState(false)
   const [calcOpen, setCalcOpen] = useState(false)
@@ -163,8 +163,8 @@ export default function RentabilidadView({
             <span className={syncing ? 'spinning' : ''}>{syncing ? '⏳' : '🔄'}</span>
             {syncing ? 'Sincronizando...' : 'Sincronizar'}
           </button>
-          <button className="btn-action" onClick={() => setAdsModalOpen(true)}>
-            <span>📊</span> Ads
+          <button className="btn-action" onClick={() => setOverrideModalOpen(true)}>
+            <span>💰</span> Percep.
           </button>
           <button className="btn-action btn-action-warning" onClick={() => setGastoModalOpen(true)}>
             <span>💸</span> Gasto
@@ -339,11 +339,11 @@ export default function RentabilidadView({
                   </div>
                 )}
                 <div className="bk-row">
-                  <span className="bk-label">Publicidad</span>
-                  <span className="bk-value">−{formatARS(calcActual.publicidad)}</span>
+                  <span className="bk-label">Cargos pendientes ML</span>
+                  <span className="bk-value">−{formatARS(calcActual.cargosPendientesML)}</span>
                   <span className="bk-detail">
-                    <button className="link-btn" onClick={() => setAdsModalOpen(true)}>
-                      {calcActual.publicidad === 0 ? 'cargar' : 'editar'}
+                    <button className="link-btn" onClick={() => setOverrideModalOpen(true)}>
+                      {calcActual.cargosPendientesML === 0 ? 'cargar' : 'editar'}
                     </button>
                   </span>
                 </div>
@@ -509,15 +509,6 @@ export default function RentabilidadView({
               <div className="mini-value">{calcActual.mejorDiaMonto > 0 ? formatARS(calcActual.mejorDiaMonto) : '—'}</div>
               <div className="mini-detail">{mejorDiaFormatted}</div>
             </div>
-            <div className="mini-card">
-              <div className="mini-label">ROAS</div>
-              <div className={`mini-value ${calcActual.publicidad > 0 ? 'mini-roas' : 'mini-disabled'}`}>
-                {calcActual.publicidad > 0 ? `×${calcActual.roas.toFixed(1)}` : '—'}
-              </div>
-              <div className="mini-detail">
-                {calcActual.publicidad > 0 ? 'retorno sobre Ads' : 'sin Ads cargado'}
-              </div>
-            </div>
           </div>
         </>
       ) : (
@@ -531,7 +522,7 @@ export default function RentabilidadView({
         />
       )}
 
-      {adsModalOpen && <CargarAdsModal onClose={() => setAdsModalOpen(false)} />}
+      {overrideModalOpen && <BillingOverrideModal onClose={() => setOverrideModalOpen(false)} />}
       {gastoModalOpen && <GastoRapidoModal onClose={() => setGastoModalOpen(false)} />}
       {configModalOpen && <ConfigModal onClose={() => setConfigModalOpen(false)} />}
       {calcOpen && <QuickCalc onClose={() => setCalcOpen(false)} />}
@@ -670,7 +661,7 @@ export default function RentabilidadView({
         .link-btn:hover { color: #3ee5e0; }
         .link-btn-inline { margin-left: 8px; font-size: 10px; }
 
-        .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+        .mini-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
         .mini-card { background: rgba(13, 77, 110, 0.18); border: 1px solid rgba(62, 229, 224, 0.1); border-radius: 10px; padding: 12px 14px; }
         .mini-label { font-size: 10px; color: var(--text-muted); letter-spacing: 0.6px; font-weight: 500; margin-bottom: 4px; }
         .mini-value { font-size: 20px; font-weight: 500; color: var(--text-primary); font-variant-numeric: tabular-nums; line-height: 1; }
